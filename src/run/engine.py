@@ -177,6 +177,12 @@ class MapEngine:
         self._cand = {n: np.zeros(cap, np.float64) for n in "xyz"}
         self._cand_slots = np.zeros(cap, np.int64)
         self._has_return = np.zeros(cap, np.bool_)
+        # Membership table for the cleanup guard, one byte per slot -- the same
+        # size and the same lifetime as `occ_state` above, and allocated here for
+        # the same reason: it replaces `np.isin(occupied, touched)`, which built an
+        # 8.18 MB temporary and sorted internally every frame. It is all-False
+        # between frames; `_cleanup` sets and clears only the touched slots.
+        self._touched_lut = np.zeros(n_slots, np.bool_)
 
     # -- binning ------------------------------------------------------------
 
@@ -382,7 +388,19 @@ class MapEngine:
 
         # The guard: a cell with a return in THIS scan is never cleared.
         guard = self._has_return[:m]
-        np.copyto(guard, np.isin(occupied, touched))
+        # Equivalent to np.copyto(guard, np.isin(occupied, touched)) and
+        # bit-identical at the level of the whole map hash, but without the 8.18 MB
+        # sorted temporary: both arrays index the same slot space, so membership is
+        # a lookup, not a search. Safe only because `touched` comes from
+        # scatter_sorted, which drops idx < 0 before sorting and emits one slot per
+        # segment -- no -1 (which would silently mark the LAST slot) and no repeats.
+        # `reports/r-b-p99-tail-investigation.md` section 10.
+        lut = self._touched_lut
+        lut[touched] = True
+        try:
+            np.copyto(guard, lut[occupied])
+        finally:
+            lut[touched] = False        # must be all-False for the next frame
 
         result = visibility_cleanup(
             cx, cy, cz, self.range2d, has_return_now=guard,
