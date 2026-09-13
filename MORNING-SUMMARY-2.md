@@ -278,6 +278,67 @@ number.**
 
 ---
 
+## 4a. Second half of the night — after your review
+
+Nine further commits. Everything below is local.
+
+| item | outcome | commit |
+|---|---|---|
+| **"Zero allocation in the frame loop"** | **SCOPED, not retracted** — 12 edits / 7 files, both scope gaps kept separate; `--alloc` now fails loudly with `--seq` | `235986d`, `b38b053` |
+| **R-g** | **DONE** — retained-growth invariant extended to perception; suite 672 → **673 passed** | `8b40e44` |
+| **R-h `cleanup`** | **DONE and proposed** — the 9.61 MB is `np.isin` *inside an argument*; a boolean LUT is 21× / 3.9× and bit-identical | `2cfd487` |
+| **R-h `ground`** | **INCONCLUSIVE — instrument failed.** See below. | `9b50111` |
+| **D10 method + STEP 1** | **DONE as prep** — transcription shrinks it to `_refined` alone; no reduction in the chain, so no ULP risk | `2f08ed0`, `6446648` |
+| **R-i** | **PROPOSED** — technique already proven; the real decision is table unification | `e1b1056` |
+
+### The finding I would read first: the machine degraded 4.4× mid-session
+
+`ground_cost.py` read **21.01 ms** early and **93.44 ms** late — same script, same
+data, 2% CPU load. Measured at that moment: **CPU downclocked to 1520 MHz against
+a 2400 MHz base (37% off)** and **commit charge 23.61 GB against 15.73 GB
+physical**, i.e. ~8 GB over-committed and paging.
+
+**So every absolute timing from the late window is void**, including the `ground`
+numbers, and I did not publish a `ground` verdict off them. Its correlations came
+out mutually contradictory across runs (`corr(time, n_points)` −0.592 then +0.532),
+which is the signature of noise rather than evidence either way.
+
+**What survives, and why it survives:** `transform` and `cleanup` were **A/B arms
+run back to back in one process on identical data**, so a machine-wide slowdown
+scales both arms and the *ratios* hold — 25×, 21×, 3.9×. Allocation counts are
+unaffected entirely; `tracemalloc` counts bytes, not time. That is the difference
+between a controlled comparison and a headline number, and it is why those
+sections were built as A/Bs.
+
+**It also strengthens D8 considerably.** A host whose absolute timings move 4.4×
+within one session cannot anchor a latency claim by hostname alone — the machine
+state has to travel with the number.
+
+### Note on the final gates
+
+`ruff` is **1 error** (the pre-existing E741, R-d). The full suite was **not**
+re-run at the end: it timed out past 10 minutes on the degraded machine, where it
+had taken 2–6 earlier. It did not need re-running — `git diff 8b40e44..HEAD --
+src/ tests/ include/ configs/ scripts/` is **empty**, so no code has changed since
+the last full green run, and **673 passed / 1 failed (D1) / 3 skipped** stands.
+Everything committed after that point is `reports/`, `pending-review/` and
+`OPEN-ITEMS.md`.
+
+### Two other things worth your eye
+
+**The allocation claim was the determinism defect again**, third instance: a
+back-end figure from `timing_table.py`'s synthetic path quoted as whole-frame,
+exactly like 80.78 ms. Fixed the same way Shrestha fixed determinism — split, not
+retract — because the back-end achievement is real (`bin` allocates 0.04 MB, and
+that is the control proving the invariant works where enforced).
+
+**The two D10 traps are now named checks with a measured fixture**, not notes.
+`slot_of`'s two OUTSIDE paths diverge on **361 of 361** swept points when a window
+is un-tracked and **0 of 361** when tracked — the worst possible shape, since one
+mask passes every test written against a tracked map. And `OUTSIDE == -1`, so a
+conflated mask feeds `-1` into a ring-indexed gather and silently reads the *last*
+ring.
+
 ## 5. What I would pick up next
 
 1. **D1.** It is now contaminating two published accuracy figures and it makes
