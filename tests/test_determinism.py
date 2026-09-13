@@ -260,3 +260,70 @@ def test_no_allocation_inside_the_frame_loop():
         f"the frame loop grew the heap by {grew:,} B over {len(frames)} frames; "
         "every buffer it touches is supposed to be sized at startup")
     assert engine is MapEngine_for_alloc
+
+
+def test_no_retained_growth_in_the_perception_frame_loop():
+    """R-g -- the OTHER half of the frame loop.
+
+    The test above covers `MapEngine.step`, the GRID half. This covers
+    `iter_pipeline`, the PERCEPTION half, which was uncovered while allocating
+    ~39.5 MB per frame -- 10.86 MB of it in `transform_points` alone. The README
+    claim "zero allocation in the frame loop" was scoped to the back end on
+    2026-09-13 partly because nothing here was watching.
+    See `reports/r-b-p99-tail-investigation.md`.
+
+    Two things this deliberately does NOT assert, and conflating them is how the
+    README claim went wrong in the first place:
+
+      1. **Not zero CHURN.** The perception half allocates ~39.5 MB per frame of
+         transient working memory and would fail such a test today. That is D9
+         (`pending-review/transform-points-allocation.md`), not this.
+      2. **RETAINED growth only**, the same metric as the grid test above: a
+         temporary allocated *and freed* inside one frame does not move
+         `tracemalloc.get_traced_memory()[0]`. What this catches is the failure
+         that makes the memory bound false -- something that grows with frame
+         count.
+
+    It measures a STEADY-STATE window, not the first one. The first window
+    retains ~8.8 MB, which is one live `PerceptionFrame`'s arrays rather than a
+    leak -- the generator holds the most recent frame while the next is built.
+    Measured windows after that are flat: +24 KB then -26 KB over 8 frames each,
+    -1,360 B combined. Asserting on the first window would pin a one-time step as
+    though it were per-frame cost.
+    """
+    import tracemalloc
+
+    loader = pytest.importorskip("vrgrid.perception.loader")
+    if not (loader.verify_sequence_exists("08")
+            and loader._velodyne_path("08", 0).exists()):
+        pytest.skip("KITTI seq 08 not present -- set VRGRID_DATA_ROOT")
+
+    from vrgrid.run.__main__ import iter_pipeline
+
+    frames = iter(iter_pipeline("08", 24))
+    for _ in range(4):                      # warm every lazily sized buffer
+        if next(frames, None) is None:
+            pytest.skip("sequence too short to warm the pipeline")
+
+    def window(n):
+        before = tracemalloc.get_traced_memory()[0]
+        seen = 0
+        for _ in range(n):
+            if next(frames, None) is None:
+                break
+            seen += 1
+        return tracemalloc.get_traced_memory()[0] - before, seen
+
+    tracemalloc.start()
+    try:
+        window(8)                           # absorbs the one live frame
+        grew, seen = window(8)              # steady state
+    finally:
+        tracemalloc.stop()
+
+    if seen < 4:
+        pytest.skip(f"only {seen} steady-state frames available")
+    assert grew < 64 * 1024, (
+        f"the PERCEPTION frame loop retained {grew:,} B over {seen} steady-state "
+        "frames; transient churn is expected here and is not what this checks, "
+        "but nothing may grow with frame count")
