@@ -1,5 +1,13 @@
 # Morning summary 2 — overnight run, 2026-09-13 / 14
 
+> **UPDATE 2026-09-14 — machine restarted and recalibrated; the warning below is
+> resolved.** Calibration passed (`ground_cost.py` 20.95 / 20.33 / 20.12 ms against
+> known-good ~21, flat across reps; commit 12.9 GB under 15.73 physical; CPU
+> 2400/2400 MHz). `ground` was then measured cleanly: **its tail is not in
+> Patchwork++** — p99−p50 ~1 ms in isolation against 11 ms in-pipeline. See
+> `reports/r-b-p99-tail-investigation.md` §12. The banner is kept as the record of
+> why the first attempt failed.
+
 > # [!] READ FIRST — this machine is not currently trustworthy for timing work
 >
 > **Restart it, or leave it idle for an extended period, before running anything

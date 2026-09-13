@@ -306,6 +306,9 @@ evidence against `searchsorted`; the LUT is simply the right structure.
 
 ## 11. [!] `ground` — ATTEMPTED AND INCONCLUSIVE, and the reason matters more
 
+> **Superseded by §12** — re-measured on a restarted, calibrated machine. The
+> account below of *why* the first attempt failed stands; its conclusion does not.
+
 I tried to settle `ground` the same way, and **I am not reporting a conclusion,
 because the instrument failed.** The attempt is recorded because the failure is
 the useful part.
@@ -363,6 +366,64 @@ Allocation counts are unaffected entirely: `tracemalloc` counts bytes, not time.
   machine state attached, not just its hostname.
 - **R-b §3's warning** that two identical runs disagreed on the median by 17% was
   an understatement. The real spread over a session is far larger.
+
+## 12. `ground`, measured properly: the tail is NOT in Patchwork++
+
+Re-run after a restart, with the D8 discipline applied — machine state recorded
+before and after every run, and a calibration gate first.
+
+**Calibration.** `ground_cost.py` reproduced the known-good figure before anything
+else was believed: reps **20.95 / 20.33 / 20.12 ms** against the early-session
+21.29 / 20.82 / 20.90, flat across reps, fallback back to 0.32 ms, agreement
+identical at 96.5%. Machine state held throughout: CPU 2400/2400 MHz, commit
+12.85–12.89 GB against 15.73 GB physical.
+
+**Result — `ground_tail.py`, seq 08, 60 preloaded scans, two runs × two passes,
+fresh estimator per pass:**
+
+| run / pass | p50 | p99 | max | frames > 1.5× median |
+|---|---|---|---|---|
+| 1 / 1 | 18.40 | **30.02** | 30.46 | 2 of 60 |
+| 1 / 2 | 18.51 | 19.77 | 19.98 | 0 |
+| 2 / 1 | 18.55 | 19.50 | 19.60 | 0 |
+| 2 / 2 | 18.45 | 19.55 | 19.99 | 0 |
+
+**In isolation Patchwork++ has almost no tail.** In three of four passes
+p99 − p50 is **~1 ms** and the worst frame is **≤ 1.08× median**. The one wider
+pass is the very first in a fresh process, and does not recur.
+
+Compare the same stage *inside the pipeline*: p99 − p50 of **11.13 ms** in the warm
+p99 probe (§5). **The segmenter on its own input does not produce that spread.**
+
+The rest of the evidence agrees it is not the data:
+
+- worst-15 frame overlap between passes: **2 of 15, then 4 of 15**, against ~3.8 by
+  chance — noise.
+- `corr(time, n_points)` swings between +0.04 and +0.78 across passes. With point
+  counts spanning only 1.04× and times within ~1 ms, there is too little variance
+  for a correlation to mean anything; it should not be read either way.
+
+### What this establishes, and what it does not
+
+**Established:** `ground`'s in-pipeline tail is **extrinsic** to Patchwork++. The C++
+extension is not the thing to optimise, and `ground` comes off the list of stages
+with an intrinsic tail.
+
+**Not established — a hypothesis, stated as one:** the most plausible source is the
+mechanism §6 proved for `transform`. The frame allocates ~59 MB of transient churn;
+when the allocator faults fresh pages in, the stall lands in *whichever stage is
+running*, and `ground` is one of the longest. That would make `ground`'s tail a
+symptom of other stages' allocation rather than its own. **Testable, not yet
+tested:** apply the `transform` and `cleanup` fixes (D9, `cleanup-isin-guard`) and
+re-measure `ground`'s *in-pipeline* spread. If it collapses toward ~1 ms, the
+hypothesis holds.
+
+### Why this could be answered now and not last night
+
+Same harness, same data. The difference is entirely the machine: the first attempt
+ran at 1520/2400 MHz with ~8 GB over-committed and produced mutually contradictory
+numbers. That is D8's upgraded scope demonstrated end to end — the question was
+always answerable; the instrument was not, until its state was controlled.
 
 ## 9. Reproduce
 
