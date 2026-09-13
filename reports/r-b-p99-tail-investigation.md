@@ -262,6 +262,48 @@ and it is **our own numpy** rather than a C++ extension, so the same
 preallocation A/B that settled `transform` can be run against it directly.
 `ground` should be treated as a separate problem with a different cause.
 
+## 10. R-h: `cleanup`'s allocation is `np.isin`, in an argument
+
+Following §9's recommendation to take `cleanup` next rather than `ground`, and
+confirmed by the isolated A/B §9 demands rather than by the `tracemalloc` table.
+
+**The stage is not allocating where it looks like it is.** `visibility_cleanup`
+promises *"no allocation when handed a scratch"* and the engine hands it one, so
+none of the 9.61 MB is in the eq. (32) pass. It is all in the three lines of
+candidate selection before the call. On a real 30-frame seq-08 map (910,000
+slots, 382,345 occupied):
+
+| operation | peak alloc | p50 | p99 |
+|---|---|---|---|
+| `state == OCC_OCCUPIED` | 0.91 MB | 0.115 ms | 0.338 ms |
+| `np.flatnonzero(mask)` | 3.97 MB | 2.333 ms | 2.632 ms |
+| **`np.isin(occupied, touched)`** | **8.18 MB** | **5.677 ms** | **7.711 ms** |
+
+`np.isin` dominates both columns and it sits inside an otherwise exemplary line:
+
+```python
+np.copyto(guard, np.isin(occupied, touched))
+```
+
+**The `np.copyto` into a preallocated buffer is right. The allocation is in the
+argument.** `np.isin` builds an 8.18 MB temporary, sorting internally, before a
+byte is copied — so the preallocation is defeated by the expression feeding it.
+That is a different failure from `transform_points`, which allocates openly; this
+one is invisible precisely *because* the surrounding line is careful.
+
+A boolean lookup table — both arrays index the same slot space, so membership is a
+lookup, not a search — gives **0.38 MB, 1.472 ms p50, 2.059 ms p99: 21× less
+allocation, 3.9× faster, and `np.array_equal` identical output.**
+
+Written up in `pending-review/cleanup-isin-guard.md`, not applied: `engine.py` is
+Shrestha's and the LUT arguably belongs in `allocate()`.
+
+**Two negative results worth keeping.** `np.take(out=)` is *slower* than plain
+fancy indexing (3.633 vs 1.472 ms), so the obvious further optimisation backfires.
+And a `searchsorted` probe read 51 ms — but it was **not a correct membership
+test**, so that number measured the wrong thing and should not be cited as
+evidence against `searchsorted`; the LUT is simply the right structure.
+
 ## 9. Reproduce
 
 ```sh
