@@ -6,6 +6,11 @@ created or modified.
 `include/vrgrid/api.py` is **frozen** and this design requires no change to it.
 **Written:** 2026-09-13, against `main` @ `92fc7d0`.
 
+> **[!] The blocker is throughput, not message mapping.** `query()` costs 54.7 µs,
+> so a 20 m × 20 m export at 5 cm is **8.75 s per published frame — a 0.11 Hz
+> ceiling.** A vectorised bulk reader is a **prerequisite**, and it needs a
+> decision about a second query path. **Do not start with the layer mapping** (§4).
+>
 > **[!] Untestable here.** `rclpy`, `grid_map_msgs`, `sensor_msgs`, `nav_msgs`,
 > `std_msgs` and `tf2_ros` are all **absent** on this machine — verified, not
 > assumed. Nothing below has been run. Message field names and layer semantics
@@ -99,25 +104,47 @@ return [query(gm, float(x), float(y)) for x, y in zip(xs, ys)]
 over 10^5 points at 10 Hz is not a thing you can do"* — and then it is one,
 deliberately, so that there is only one query implementation.
 
-A 20 m × 20 m window at 5 cm is **160,000 cells**, i.e. 160,000 Python-level
-`query()` calls per published frame. *(Measured throughput: see the note added
-below — the figure was taken after this section was drafted.)*
+### Measured, and it is worse than "needs optimising"
 
-Three ways out, in the order I would consider them:
+`query()` costs **54.7 µs per call** on a warmed map (4,000 calls, real seq 08,
+20 frames accumulated). So:
 
-1. **Publish at a lower rate than the frame rate.** A local planner does not need
-   a fresh `GridMap` at 10 Hz; 2 Hz is usually plenty. This costs nothing
-   architecturally and is the honest first move.
-2. **Export on a background thread**, off the frame loop, from a snapshot. The
-   map is a fixed preallocated arena, so a consistent snapshot is cheap to
-   define — but **this interacts with D1**: while the ground segmenter is a
-   stateful singleton, "a snapshot" is not as well-defined as it looks.
-3. **A vectorised bulk reader.** The right long-term answer and the most
-   dangerous: it would be a *second* implementation of query semantics, which is
-   precisely the class of bug this project keeps designing out
-   (`lattice.i_fine`'s scalar/vector split, `bin_points` pinned bit-identical to
-   the reference). If it is built, it must be pinned bit-identical to
-   `query_region` in a test, exactly as `bin_points` is.
+| window | cells | time per published frame | rate ceiling |
+|---|---|---|---|
+| **20 m × 20 m @ 5 cm** | 160,000 | **8.75 s** | **0.11 Hz** |
+| 20 m × 20 m @ 10 cm | 40,000 | 2.19 s | 0.46 Hz |
+| 10 m × 10 m @ 5 cm | 40,000 | 2.19 s | 0.46 Hz |
+
+**[!] This corrects an earlier draft of this section**, which suggested publishing
+below frame rate — *"2 Hz is usually plenty"* — as the honest first move. **It is
+not available.** 2 Hz is unreachable by a factor of ~18 even on the smallest
+window above. Throttling does not solve a problem of this size; it only changes
+how often you pay 8.75 seconds.
+
+So the three options are not peers, and the ordering in the earlier draft was
+wrong:
+
+1. **A vectorised bulk reader is a PREREQUISITE, not an optimisation.** Nothing
+   ships without it. And it is the dangerous one: it would be a *second*
+   implementation of query semantics, precisely the class of bug this project
+   keeps designing out — `lattice.i_fine`'s scalar/vector split, `bin_points`
+   pinned bit-identical to the reference. **It must be pinned bit-identical to
+   `query_region` in a test, exactly as `bin_points` is.** That test is not
+   optional and it is the main cost of this work.
+2. **Export off the frame loop** regardless. Necessary but nowhere near
+   sufficient — a background thread that takes 8.75 s per export is still 8.75 s
+   of CPU competing with a 10 Hz frame loop on the same cores. Note this also
+   **interacts with D1**: while the ground segmenter is a stateful singleton, "a
+   consistent snapshot" is less well-defined than it looks.
+3. **Shrink the window and coarsen it** as a stopgap, understanding that at 10 cm
+   the export no longer carries ring 0's resolution and the near-field advantage
+   is what a `grid_map` consumer came for.
+
+**The practical consequence for whoever picks this up: do not start with the
+message mapping.** The layer and bitfield questions in §3 are real but they are
+hours of work on a settled shape. The throughput problem is the one that decides
+whether the adapter is possible at all, and it needs a design decision about a
+second query path before any ROS code is written.
 
 **Do not put export in the frame loop.** The frame budget is already contested —
 whole-frame p99 is over 100 ms on every host measured (D8), and the 10 Hz claim
