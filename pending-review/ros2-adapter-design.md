@@ -125,12 +125,28 @@ So the three options are not peers, and the ordering in the earlier draft was
 wrong:
 
 1. **A vectorised bulk reader is a PREREQUISITE, not an optimisation.** Nothing
-   ships without it. And it is the dangerous one: it would be a *second*
-   implementation of query semantics, precisely the class of bug this project
-   keeps designing out — `lattice.i_fine`'s scalar/vector split, `bin_points`
-   pinned bit-identical to the reference. **It must be pinned bit-identical to
-   `query_region` in a test, exactly as `bin_points` is.** That test is not
-   optional and it is the main cost of this work.
+   ships without it, and it **must be pinned bit-identical to `query_region`**,
+   exactly as `bin_points` is. That test is not optional.
+   
+   **[!] METHOD, decided 2026-09-13 — do not write it from a spec.** Vectorise the
+   EXISTING `query()` by transcribing its actual source line by line and replacing
+   each scalar operation with the array equivalent **in the same order** — not by
+   re-deriving the behaviour from a description. Branches become masks that
+   preserve the same per-cell decision, not shortcuts.
+   
+   **STEP 1 is already done:** `pending-review/query-vectorisation-transcription.md`
+   holds the full transcription, every branch, and the hazards. Read it before
+   writing anything. Its headline finding materially reduces this item:
+   **`ring_of_into`, `flat_slot_into` (already pinned bit-identical),
+   `occupancy_state(slots=...)`, `i_fine`/`i_ring` and `unpack_class` are ALREADY
+   vectorised or batch-capable.** The only genuinely scalar step is `_refined`.
+   So "a second implementation of query semantics" is the right caution for
+   `_refined` and an overstatement for the rest, which is reuse.
+   
+   **And there is no reduction anywhere in `query()`'s chain**, so unlike
+   `scatter_mean` there is no summation-order ULP risk — a correct vectorisation
+   should be bit-identical by construction. The one real dtype hazard is
+   float32/float64 promotion on the `int16 / 100.0` height conversions.
 2. **Export off the frame loop** regardless. Necessary but nowhere near
    sufficient — a background thread that takes 8.75 s per export is still 8.75 s
    of CPU competing with a 10 Hz frame loop on the same cores. Note this also
