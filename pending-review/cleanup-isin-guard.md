@@ -1,5 +1,13 @@
 # pending-review: `cleanup`'s allocation is `np.isin` in an argument — 21× and 3.9× available
 
+> **[!] CORRECTION 2026-09-14 — the title overstates it.** `np.isin` was the
+> *second*-largest allocator in `_cleanup` (6.40 MB), behind **`_centres`
+> (7.09 MB, 10.78 ms p50)**, which I had not measured. The LUT change below is
+> still correct, bit-identical at the whole-map level, and was applied on
+> `jp/p99-alloc-fixes` (`d540618`, pending Shrestha's review) — but it is not the
+> fix for this stage's peak. Whole-frame effect measured: p50 −1.35 ms, p99 not
+> resolvable from noise at 3 reps.
+
 **Status:** proposal, **nothing applied**. `src/run/engine.py` is Shrestha's
 (`"""The map back end, as one frame loop. [Shrestha]"""`) and on the frame loop.
 **Measurement:** `reports/r-b-p99-tail-investigation.md` §10, harness

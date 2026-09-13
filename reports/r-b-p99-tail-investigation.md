@@ -264,6 +264,27 @@ preallocation A/B that settled `transform` can be run against it directly.
 
 ## 10. R-h: `cleanup`'s allocation is `np.isin`, in an argument
 
+> **[!] CORRECTION 2026-09-14 — the attribution in this section is wrong.**
+> I measured only the three lines I suspected, not the whole function. Reading
+> and instrumenting **every line** of `_cleanup` on a warmed real engine (seq 08):
+>
+> | line | p50 | allocation |
+> |---|---|---|
+> | `visibility_cleanup` (the eq. 32 pass) | 11.28 ms | 0.07 MB |
+> | **`_centres`** (occupied slots → cell centres) | **10.78 ms** | **7.09 MB** |
+> | `occupancy_state` | 2.87 ms | 0.00 MB |
+> | `flatnonzero` | 0.73 ms | 3.22 MB |
+> | `np.isin` guard (before the fix) | — | 6.40 MB |
+> | LUT guard (after the fix) | 0.37 ms | 0.29 MB |
+>
+> **`np.isin` was the second-largest allocator, not the largest.** `_centres` sets
+> the stage's peak, which is why the per-stage *peak* stayed ~9.6 MB after the LUT
+> removed `np.isin`'s 6.4 MB of churn: a peak can only fall when its largest
+> contributor does. The LUT fix itself stands — bit-identical map, and a measured
+> whole-frame p50 gain of ~1.3 ms — but "cleanup's 9.61 MB is `np.isin`" is false.
+> The real target in this stage is `_centres`. See the p99 fix report.
+
+
 Following §9's recommendation to take `cleanup` next rather than `ground`, and
 confirmed by the isolated A/B §9 demands rather than by the `tracemalloc` table.
 
