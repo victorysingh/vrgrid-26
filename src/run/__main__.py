@@ -59,7 +59,7 @@ class PerceptionFrame:
 
 
 def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True,
-                  timer=None, start_frame: int = 0):
+                  timer=None, start_frame: int = 0, reuse_buffers: bool = False):
     """Yield a PerceptionFrame per scan of `seq`.
 
     `start_frame` skips ahead before the first yield (default 0, so existing
@@ -84,6 +84,19 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
         return timer.stage(name) if timer is not None else nullcontext()
 
     scans = loader.scans(seq, max_frames=max_frames, start_frame=start_frame)
+
+    # `reuse_buffers` (default OFF): write `points_world` into one scratch reused
+    # every frame instead of allocating ~10.9 MB per frame in `transform_points`.
+    # [!] Each yielded frame's `points_world` is then OVERWRITTEN by the next
+    # frame. Only a caller that finishes with a frame before pulling the next may
+    # turn it on -- `main()` without a dashboard and `timing_table.py --seq` do.
+    # Anything that keeps frames, `list(iter_pipeline(...))` included, must not;
+    # the tests do exactly that, which is why the default is off.
+    tscratch = None
+    if reuse_buffers:
+        cap = int(schedule_mod.load_thresholds()["scatter"].get("max_points_per_frame",
+                                                               150_000))
+        tscratch = transforms.new_transform_scratch(cap)
     i = 0
     while True:
         # Timed by hand rather than with `stage("load")`, because the pull that
@@ -100,7 +113,8 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
 
         with stage("transform"):
             t_s_w = transforms.sensor_to_world(pose, sequence=seq)
-            points_world = transforms.transform_points(points[:, :3], t_s_w)
+            points_world = transforms.transform_points(points[:, :3], t_s_w,
+                                                       scratch=tscratch)
             vehicle_xyz = transforms.vehicle_to_world(pose, sequence=seq)[:3, 3]
 
         with stage("range_image"):
@@ -207,8 +221,11 @@ def main(argv=None) -> int:
     n, cleared, protected = 0, 0, 0
     truncated_frames, truncated_peak = 0, 0
     ground_method = None
+    # Buffers are reused only with no dashboard attached: the loop below then
+    # finishes with each frame before pulling the next. A dashboard view may hold
+    # frames, so it keeps the allocating path.
     for frame in iter_pipeline(args.seq, args.frames, use_patchworkpp=not args.no_patchworkpp,
-                               start_frame=args.start_frame):
+                               start_frame=args.start_frame, reuse_buffers=view is None):
         ground_method = frame.ground_method
         counters = engine.step(frame) if engine is not None else None
         if counters is not None:

@@ -499,8 +499,11 @@ def run_real(args, sched=None):
     # perception half happens inside the generator, during `next()`. Wrapping
     # only `engine.step` gave a FRAME row smaller than several of its own
     # stages and shares that summed to 156%.
+    # reuse_buffers: this loop steps each frame before pulling the next, so the
+    # allocation-free transform path is safe here -- see iter_pipeline.
     frames = iter(iter_pipeline(args.seq, args.frames + 1,
-                                use_patchworkpp=not args.no_patchworkpp, timer=t))
+                                use_patchworkpp=not args.no_patchworkpp, timer=t,
+                                reuse_buffers=True))
     n = 0
     while True:
         t0 = time.perf_counter()

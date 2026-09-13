@@ -154,17 +154,65 @@ def sensor_to_world(pose: np.ndarray, sequence: str = "00") -> np.ndarray:
     return vehicle_to_world(pose, sequence) @ T_S_V
 
 
-def transform_points(points: np.ndarray, T: np.ndarray) -> np.ndarray:
+def new_transform_scratch(max_points: int) -> dict:
+    """Buffers for an allocation-free `transform_points` on the frame loop.
+
+    `h` is the homogeneous (N, 4) array with its ones column set ONCE, here;
+    only the xyz columns are ever written. `out` is Fortran-ordered so that its
+    leading `n` columns are contiguous and the matmul writes straight into them.
+    Size it from `configs/thresholds.yaml: scatter.max_points_per_frame`, the
+    same bound every other per-point scratch uses.
+    """
+    return {"h": np.ones((max_points, 4), dtype=np.float64),
+            "out": np.empty((4, max_points), dtype=np.float64, order="F")}
+
+
+def transform_points(points: np.ndarray, T: np.ndarray, scratch: dict | None = None
+                     ) -> np.ndarray:
     """Apply a 4x4 homogeneous transform to 3D points.
 
     Args:
         points: (N, 3) or (N, 4) array. A 4th column (intensity) is ignored and
             not returned.
         T: (4, 4) transform matrix.
+        scratch: optional buffers from `new_transform_scratch`. Omit it and
+            nothing changes -- a fresh array is returned, as always.
 
     Returns:
         (N, 3) float64 transformed points.
+
+    [!] With `scratch`, the result is a VIEW INTO THE SCRATCH and is overwritten
+      by the next call that uses the same scratch. Only pass one where the result
+      is finished with before the next call -- the frame loop, not anything that
+      keeps frames.
+
+      Why it exists: without it this function allocates ~10.9 MB per call (the
+      float64 copy, a ones column, the hstack and the matmul result) on ~123,000
+      points, and those allocations produced the largest per-stage p99 tail in
+      the whole frame -- p50 ~3 ms with 25-33 ms stalls when the allocator had to
+      fault fresh pages in. `reports/r-b-p99-tail-investigation.md` section 6.
+
+      It is BIT-IDENTICAL to the allocating path, and deliberately so: it makes
+      the SAME (4, 4) @ (4, N) matmul call on the SAME F-contiguous view of an
+      (N, 4) homogeneous array, and changes only where the result is written. A
+      hand-written element-wise version was tried and changed the output on
+      200 of 200 frames; different call shapes can sum in a different order.
+      Pinned in `tests/test_transform_scratch.py`.
+
+      A scan larger than the scratch falls back to the allocating path rather
+      than raising: correct, merely not allocation-free for that frame.
     """
+    if scratch is not None:
+        pts_in = np.asarray(points)
+        if pts_in.ndim != 2 or pts_in.shape[1] not in (3, 4):
+            raise ValueError(f"points must be (N, 3) or (N, 4), got {pts_in.shape}")
+        n = pts_in.shape[0]
+        h, out = scratch["h"], scratch["out"]
+        if n <= h.shape[0]:
+            h[:n, :3] = pts_in[:, :3]
+            np.matmul(T, h[:n].T, out=out[:, :n])
+            return out[:, :n].T[:, :3]
+
     pts = np.asarray(points, dtype=np.float64)
     if pts.shape[1] not in (3, 4):
         raise ValueError(f"points must be (N, 3) or (N, 4), got {pts.shape}")
