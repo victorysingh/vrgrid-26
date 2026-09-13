@@ -231,6 +231,60 @@ query semantics, which is precisely the class of bug this project keeps designin
 out" — is still the right caution for `_refined`, and is **overstated for the rest
 of the chain**, which is reuse rather than reimplementation.
 
+## 6a. [!] The two traps as NAMED CHECKS, not notes
+
+Per JP: these are to be **named checks in the implementation**, not paragraphs in
+a document someone skims. Write these two by name, first, before the bulk
+function works — they are the tests that fail informatively.
+
+### `test_bulk_query_keeps_the_two_outside_paths_independent`
+
+**This is measured, not hypothetical.** `slot_of` returns OUTSIDE from two places
+— the ring test (`ring_of`) and the window test (`flat_slot < 0`) — and they are
+**independent**:
+
+| map state | swept points passing `ring_of` but failing the window test |
+|---|---|
+| tracked steady state (10 frames of seq 08, window centred) | **0 of 361** |
+| window not caught up with the vehicle (`vehicle_xy_m` moved, no shift) | **361 of 361** |
+
+**That is the worst possible shape for a single-mask bug.** With one mask,
+everything passes against a tracked map — which is every existing test — and the
+bulk reader silently loses cells the moment it is called mid-shift, before the
+first `_track_vehicle`, or after a large ego jump.
+
+And the sentinel makes the failure plausible rather than loud: **`OUTSIDE == -1`**,
+so a conflated mask feeds `-1` into any ring-indexed gather and numpy reads the
+**last ring**. `rings[-1]` is 80 cm, not an error. No exception, a plausible
+number, the wrong cell.
+
+The fixture to pin: a map with `vehicle_xy_m` set away from the origin and the
+windows deliberately **not** shifted, asserting the bulk result equals
+`query_region` cell for cell — i.e. `(OUTSIDE, -1)` everywhere the scalar path
+says so.
+
+### `test_bulk_query_masks_before_gathering`
+
+`np.where` evaluates both branches, so the scalar code's protective branches must
+become mask-before-gather. Two places, both from §1:
+
+- `_refined` step 15 indexes `gm.pool.cells` and calls `block_cells(block).start`
+  **only when `block >= 0`**.
+- `_transient` step 2 reads `gm.transient["flags"][slot]` **only after** the
+  `slot >= size` bounds test.
+
+The check: run the bulk reader on a map **with a refinement pool present but with
+cells whose `block < 0`**, and on a map whose **transient layer is shorter than
+the grid**, and assert no gather ever used an out-of-range or negative index. In
+practice that means asserting the result matches `query_region` on exactly those
+populations — a naive implementation returns a plausible wrong value there rather
+than raising, which is why the assertion has to be equality against the scalar
+path and not merely "did not crash".
+
+**Both checks are written against the existing scalar `query_region`**, so they can
+be written *before* the bulk function exists and will fail for the right reason
+until it is correct.
+
 ## 7. If the pinning test does not pass first time, what it probably means
 
 Per STEP 3, a failure is information, not a debugging chore. Ranked by likelihood
