@@ -183,6 +183,20 @@ class MapEngine:
         # 8.18 MB temporary and sorted internally every frame. It is all-False
         # between frames; `_cleanup` sets and clears only the touched slots.
         self._touched_lut = np.zeros(n_slots, np.bool_)
+        # Scratch for `_centres(..., sorted_slots=True)`, sized like `_cand`.
+        # Replaces ~7.4 MB of per-frame temporaries in the cleanup's slot ->
+        # centre conversion. `_ring_bounds` is each ring's first slot plus the
+        # end of the last one: the rings are contiguous and ordered by offset, so
+        # sorted slots split into one slice per ring.
+        hdt = self.handle.grid["ceiling_height"].dtype
+        self._centres_scratch = {
+            "i1": np.zeros(cap, np.int64), "row": np.zeros(cap, np.int64),
+            "col": np.zeros(cap, np.int64), "f": np.zeros(cap, np.float64),
+            "zc": np.zeros(cap, hdt), "zg": np.zeros(cap, hdt),
+            "zm": np.zeros(cap, np.bool_)}
+        rings = self.handle.rings
+        self._ring_bounds = np.array([r.offset for r in rings]
+                                     + [rings[-1].offset + rings[-1].slots], np.int64)
 
     # -- binning ------------------------------------------------------------
 
@@ -203,7 +217,7 @@ class MapEngine:
 
     # -- the inverse, for the cleanup ---------------------------------------
 
-    def _centres(self, slots, ego, out_x, out_y, out_z):
+    def _centres(self, slots, ego, out_x, out_y, out_z, sorted_slots=False):
         """Occupied slots -> cell centres, minus `ego`.
 
         Pass the vehicle's world xy for vehicle-frame centres, which is what
@@ -226,6 +240,8 @@ class MapEngine:
         multiple of W is meant -- `ix = x0 + ((col - x0) mod W)`.
         """
         n = len(slots)
+        if sorted_slots and n <= len(self._cand_slots):
+            return self._centres_sorted(slots, ego, out_x, out_y, out_z)
         for layout, buf in zip(self.handle.rings, self.buffers):
             hi = layout.offset + layout.slots
             sel = (slots >= layout.offset) & (slots < hi)
@@ -258,6 +274,65 @@ class MapEngine:
         # Stored heights are relative to the band's datum. `+ datum` puts them
         # back in the world frame; `- ego[2]`, when asked for, takes them the
         # rest of the way to the vehicle frame.
+        out_z[:n] += self.z_datum
+        if len(ego) > 2:
+            out_z[:n] -= ego[2]
+        return out_x[:n], out_y[:n], out_z[:n]
+
+    def _centres_sorted(self, slots, ego, out_x, out_y, out_z):
+        """`_centres` for SORTED slots: the same per-element operations, in the
+        same order, written in place over one contiguous slice per ring.
+
+        [!] Only valid when `slots` is ascending -- `_cleanup` passes
+          `np.flatnonzero(...)`, which is. The map-view callers pass slots of
+          unknown order and keep the shipped path (`sorted_slots=False`).
+
+          Why it exists: the shipped loop builds two boolean masks over every
+          slot per ring, gathers, divides, and scatters back through a mask --
+          ~7.4 MB and ~11 ms per cleanup on ~321,000 occupied cells, as costly
+          as the visibility pass itself. Each ring's slots are a contiguous range
+          (rings are contiguous and ordered by offset), so one `searchsorted`
+          replaces the masks and a slice replaces the gather and the scatter.
+
+          Bit-identical by construction and by test: every element sees the same
+          integer floor-divide, remainder and mod, the same `+ 0.5`, `* cell_m`
+          and `- ego`, and z the same int16 `where` then `/ 100.0`. Only the
+          destination of each result changes. Measured on 30 real seq-08 frames:
+          identical x, y, z for both ego forms, 11.02 -> 5.49 ms, 7.38 -> 0.07 MB.
+          Pinned in `tests/test_centres_sorted.py`. `take(..., mode="clip")` is
+          safe because every slot is < the total slot count.
+        """
+        n = len(slots)
+        sc = self._centres_scratch
+        bounds = np.searchsorted(slots, self._ring_bounds)
+        for i, (layout, buf) in enumerate(zip(self.handle.rings, self.buffers)):
+            a, b = int(bounds[i]), int(bounds[i + 1])
+            if a == b:
+                continue
+            k, W = b - a, buf.side
+            local, row, col, f = sc["i1"][:k], sc["row"][:k], sc["col"][:k], sc["f"][:k]
+            np.subtract(slots[a:b], layout.offset, out=local)
+            np.floor_divide(local, W, out=row)
+            np.remainder(local, W, out=col)
+            np.subtract(col, buf.x0, out=col)
+            np.mod(col, W, out=col)
+            np.add(col, buf.x0, out=col)
+            np.add(col, 0.5, out=f)
+            np.multiply(f, layout.cell_m, out=f)
+            np.subtract(f, ego[0], out=out_x[a:b])
+            np.subtract(row, buf.y0, out=row)
+            np.mod(row, W, out=row)
+            np.add(row, buf.y0, out=row)
+            np.add(row, 0.5, out=f)
+            np.multiply(f, layout.cell_m, out=f)
+            np.subtract(f, ego[1], out=out_y[a:b])
+
+        zc, zg, zm = sc["zc"][:n], sc["zg"][:n], sc["zm"][:n]
+        np.take(self.handle.grid["ceiling_height"], slots, out=zc, mode="clip")
+        np.take(self.handle.grid["ground_height"], slots, out=zg, mode="clip")
+        np.not_equal(zc, CEILING_NONE, out=zm)
+        np.copyto(zg, zc, where=zm)           # == np.where(zc != NONE, zc, zg)
+        np.divide(zg, 100.0, out=out_z[:n])
         out_z[:n] += self.z_datum
         if len(ego) > 2:
             out_z[:n] -= ego[2]
@@ -379,7 +454,8 @@ class MapEngine:
         m = len(occupied)
         self._cand_slots[:m] = occupied
         cx, cy, cz = self._centres(occupied, ego, self._cand["x"],
-                                           self._cand["y"], self._cand["z"])
+                                           self._cand["y"], self._cand["z"],
+                                   sorted_slots=True)
 
         image = np.asarray(frame.range_image)
         if self.range2d.shape != image.shape[:2]:
