@@ -9,11 +9,14 @@
   the failing determinism gate, found independently from the other direction.
 - **Seq 08 has nothing to explain** — it reproduces at every ring under either
   call pattern.
-- **Seq 00 is NOT explained by this.** Both call patterns give 6.45-6.46 against
-  a published 6.77. Narrowed to a **scored-population difference of 61-89 cells
-  at ring 1** (rings 0 and 2 match the published counts exactly), but **not
-  closed** — the harness that produced the published number was never committed,
-  so the remaining 0.32 cm is unverifiable rather than merely unknown.
+- **Seq 00 is now ALSO solved — same root cause, one step further.** It is the
+  singleton again, but carrying state across *sequences*: the published harness
+  measures 07, then 08, then 00 **in one process**, so by the time seq 00 runs the
+  estimator has already processed ~160 frames of the other two. Every published R1
+  figure reproduces **exactly** once that is replicated, seq 00's ring 1 included
+  (41,892 cells @ 6.77 cm). **See §7.** This closed within minutes of the harness
+  being committed under R-a, having resisted two investigations while it was
+  missing.
 
 **Written:** 2026-09-12, against `main` @ `23648e9`.
 **Scope:** measurement only. `src/perception/ground.py` was **not** modified; the
@@ -144,11 +147,16 @@ consumer seeing each scan once is what the pipeline actually does. Two
 estimators each making one pass agree exactly (§2), so both sides of the
 comparison see the same ground mask.
 
-## 6. [!] Seq 00: the estimator pattern does not explain it
+## 6. Seq 00, as far as it could be taken WITHOUT the harness
 
 Both call patterns give **6.45 / 6.46** against a published **6.77**. The
-difference between the two modes is 0.01 cm — noise — so whatever produces the
-0.32 cm residual is **not** the singleton.
+difference between the two modes is 0.01 cm — noise.
+
+> **Superseded by §7.** I concluded here that the residual was therefore *not*
+> the singleton. That was wrong, and wrong in an instructive way: both modes I
+> tested started seq 00 from a *fresh* estimator, so the experiment held constant
+> the very thing that turned out to matter. It is the singleton, carrying state
+> across **sequences** rather than across passes.
 
 ### Narrowed: it is a POPULATION difference, not a height difference
 
@@ -176,7 +184,7 @@ The seq-07 control confirms the method: in `shared` mode seq 07 matches the
 published **n and RMSE exactly at all three rings** (103,182 / 50,153 / 12,703).
 So the harness is right; seq 00 genuinely differs.
 
-### Why this cannot be closed
+### Why it could not be closed at the time
 
 **The published R1 harness was never committed.** The report says so plainly —
 *"`scratchpad/r1_accuracy_by_class.py` (session scratch, not committed — a
@@ -210,7 +218,90 @@ latency figure. The pattern is worth more attention than either individual
 number: a harness that produces a figure a report will quote is a deliverable,
 whatever its filename says.
 
-## 7. Recommendation
+
+---
+
+## 7. Seq 00: CLOSED — the singleton again, one scope wider
+
+**Every published R1 figure reproduces exactly** once the published harness is run
+as written. Not approximately — exactly, on all four rings of all three sequences:
+
+| seq | ring 0 | ring 1 | ring 2 | ring 3 |
+|---|---|---|---|---|
+| 07 | 103,182 @ **1.78** | 50,153 @ **3.60** | 12,703 @ **5.91** | 1,321 @ **16.93** |
+| 08 | 137,034 @ **1.17** | 141,141 @ **2.31** | 49,073 @ **4.89** | 6,856 @ **54.86** |
+| 00 | 82,868 @ **2.74** | **41,892 @ 6.77** | 11,275 @ **34.10** | 3,379 @ **9.11** |
+
+Including the cell count that was the whole puzzle: **41,892**, not the
+41,953/41,981 every separate run produced.
+
+### The mechanism
+
+`reports/harnesses/r1_accuracy_by_class.py` ends with:
+
+```python
+for seq in ("07", "08", "00"):
+    allrows += run(seq, 40, "5/10/20/40")
+```
+
+**All three sequences, one process, one module-level estimator.** Each `run()`
+builds M\* and then the map, so each sequence puts *two* passes of 40 frames
+through `ground._estimator`. By the time seq 00 is measured, that estimator has
+already processed **~160 frames of seq 07 and seq 08**.
+
+That is a state no run of mine reproduced. Every experiment in §4 gave each
+sequence a freshly built estimator — which is exactly why seq 00 refused to
+match, and why I wrongly concluded the singleton was not responsible.
+
+### Why this produces precisely the observed pattern
+
+| seq | position in the loop | estimator state when measured | result |
+|---|---|---|---|
+| 07 | **first** | fresh | reproduced exactly in §4 — nothing to explain |
+| 08 | second | ~80 frames of 07 | reproduced anyway: its drift is 0.029%, an order of magnitude too small to move a ring (§3) |
+| 00 | **third** | ~160 frames of 07 + 08 | the only one that needed the accumulated state, and the only one that failed to match |
+
+The controlled comparison, one variable — prior-sequence history:
+
+| seq 00, shared estimator | ring 1 | n |
+|---|---|---|
+| fresh process, no prior sequences | 6.45 | 41,953 |
+| **after 07 and 08 in the same process** | **6.77** | **41,892** |
+
+Same code, same data, same call pattern. **Only the estimator's history differs,
+and it moves ring-1 RMSE by 0.32 cm and the scored population by 61 cells.**
+
+### What it means
+
+The seq-00 published figure is **more** contaminated than seq 07's, not less. On
+seq 07 the contamination is one extra pass over the same data; on seq 00 it is
+160 frames of two *other* sequences. The consistent-mask estimate for seq 00
+ring 1 is **~6.46 cm**, against a published 6.77.
+
+So both open figures resolve the same way, and the D1 fix does more than turn a
+CI gate green: it removes a contaminant from **two** published accuracy numbers.
+
+### [!] And the ordering dependence is the sharper finding
+
+A published accuracy figure depends on **which other sequences were measured
+before it in the same process.** Nothing in the harness, the report or the metric
+names that as an input. Reorder the tuple `("07", "08", "00")` and the numbers
+change.
+
+That is worse than non-reproducibility, because it is invisible: the harness is
+deterministic, the data is fixed, the code is unchanged, and the number still
+depends on evaluation order. Until D1 is fixed, **any harness measuring more than
+one sequence in one process is unsafe**, and the honest mitigation is one process
+per sequence.
+
+### Credit where it is due: this is what R-a was for
+
+This closed in minutes once `r1_accuracy_by_class.py` was committed, after
+resisting two separate investigations while it was session scratch. The mechanism
+was a three-line `for` loop at the bottom of a file nobody could read. Both of
+this week's unverifiable figures had the same cause and the same cure.
+
+## 8. Recommendation
 
 **Fix the singleton, and prioritise it.** The argument is now stronger than
 "a CI gate is red":
@@ -236,7 +327,7 @@ fix is a genuine design decision — whether `segment_ground` should take an
 estimator, whether the module should expose a reset, or whether the estimator
 should be owned by the caller — not something to settle inside an investigation.
 
-## 8. Reproduce
+## 9. Reproduce
 
 Session-scratch harnesses, not committed:
 

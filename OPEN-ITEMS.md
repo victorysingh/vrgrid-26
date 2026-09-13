@@ -50,12 +50,10 @@ estimators making one pass each agree exactly, 0 of 1.48 M points differing.
 
 | # | item | notes |
 |---|---|---|
-| **R-a** | **Commit the measurement harnesses.** The recurring defect behind two unverifiable figures (see §5). Every `scratchpad/*.py` that produced a number in `reports/` should be in the repo. | Cheapest high-value item on the list. |
 | **R-b** | **Locate the p99 cause.** p99 is 127–146 ms against a 100 ms budget and **no parameter, warm-up length, frame count or library version moved it.** p50 is within reach; p99's cause has never been isolated. | The real 10 Hz blocker. Nothing measured so far explains it. |
 | **R-c** | **`stdout` UTF-8 at entry.** Deferred deliberately when the `⚑` crash was fixed at two call sites; the general fix would cover every script. | `pending-review/timing-table-unicode-crash.md` |
 | **R-d** | **`ruff` E741 in `tests/test_metrics.py:472`** (ambiguous `l`). Pre-existing on `origin/main` from `014d388`, unrelated to any of this week's work, still red. | One-line fix, not my lane (tests/). |
 | **R-e** | **README 99.87% vs `master-v4.md` 99.5%.** Logged as the same class of defect as the mIoU mismatch; never given its own pass. | Flagged in an earlier session, still open. |
-| **R-f** | **Seq 00 ring-1 residual (0.32 cm).** Narrowed to a 61–89 scored-cell population difference; not closeable because the harness that produced the published number was never committed. Would close if R-a had been done earlier. | `reports/ring1-reproduction-investigation.md` §6 |
 
 ---
 
@@ -72,6 +70,8 @@ estimators making one pass each agree exactly, 0 of 1.48 M points differing.
 | Ring-1 reproduction mismatch (seq 07) | **ROOT-CAUSED** — the singleton. Seq 08 immune; seq 00 open (R-f). | `870766c` |
 | Build provenance (native build vs wheel) | **Closed as a documented unknown** on your call — needs a multi-GB toolchain. | — |
 | R11 limits page | **DONE.** | `e4bd731` |
+| **R-a** — commit the measurement harnesses | **DONE.** 21 scripts in `reports/harnesses/`, each with a PROVENANCE header naming the report, which figures it produced, the invocation, and the traps. Lint-clean; every reformatting edit AST-verified. | `2955b14`, `8318fed` |
+| **R-f** — seq 00 ring-1 residual | **CLOSED — and it was the singleton after all**, carrying state across *sequences* rather than only across passes. The published harness measures 07, 08, 00 in one process, so seq 00's estimator holds ~160 frames of the other two. Every published R1 figure then reproduces exactly, 41,892 @ 6.77 included. Closed within minutes of R-a committing the harness, after resisting two investigations. | `reports/ring1-reproduction-investigation.md` §7 |
 
 ---
 
