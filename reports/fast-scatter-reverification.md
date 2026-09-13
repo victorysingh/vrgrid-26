@@ -99,3 +99,49 @@ Shrestha's and this contradicts it.
 ```bash
 python scripts/frnet_fast_scatter.py     # self-verify + benchmark, ~30 s
 ```
+
+---
+
+## Re-verified 2026-09-13 (OPEN-ITEMS item DL, sub-task 1)
+
+Still exact, through `frnet_eval.py --fast-scatter` rather than the standalone
+self-check, so the verification runs on the path the evaluation actually uses:
+
+```
+verifying on cpu: 20,000 rows x 64 ch into 4,000 slots (28 empty)
+  scatter_max   forward  max abs diff 0.000e+00 (0.0 ulp), 0 of 254,208 values differ,
+                         empty-slot convention matches
+  scatter_mean  forward  max abs diff 0.000e+00 (0.0 ulp), 0 of 256,000 values differ,
+                         empty-slot convention matches
+  scatter_max   backward max abs diff 0.000e+00
+  scatter_mean  backward max abs diff 0.000e+00
+  verified: scatter_max exact in both directions, scatter_mean within float32 rounding
+
+fast-scatter ENABLED in frustum_encoder, frnet_backbone (scatter_max)
+             and frustum_encoder (scatter_mean)
+```
+
+**Both directions exact**, and the patch reaches all three binding sites — which
+is the failure this shim was specifically written to avoid, since
+`frnet_backbone` does `from .frustum_encoder import scatter_max` at import and so
+binds the function object. Patching only `frustum_encoder.scatter_max` would
+leave five of seven per-forward calls on the slow path and the run would merely
+look disappointing rather than broken.
+
+### [!] The accuracy half could NOT be re-confirmed — no checkpoint
+
+`frnet_eval.py` stops after the verification above with:
+
+```
+checkpoint not found: checkpoints\frnet-semantickitti_seg.pth
+```
+
+`checkpoints/` does not exist on this machine, `.gitignore:18` excludes model
+weights deliberately, and no `.pth` has ever been committed on any branch. So
+**90.3% / 65.2% / 61.1% was not re-measured today** — the numbers stand on the
+earlier run, not on this one. Recorded as a blocker rather than glossed:
+`MORNING-SUMMARY-2.md`, "Needs your call".
+
+The same gap blocks the three-way plan-regret comparison (GT labels vs
+FRNet-predicted labels), because the predicted-label arm needs weights to infer
+with. Nothing about that arm was attempted.
