@@ -194,6 +194,74 @@ function keeps returning a fresh array (callers may retain it) and where a reuse
 buffer would live, given that `transform_points` is currently stateless and is
 called from more than one place.
 
+## 9. Does the allocation mechanism generalise? Partly.
+
+`transform` was found one stage at a time. The obvious next question is whether
+allocation explains the *rest* of the tail, so: per-stage allocation for the whole
+pipeline, measured by wrapping `Timer.stage` — the one hook every stage boundary
+in both halves passes through, so no second list of stage names can drift from
+`timing.STAGES`.
+
+41 frames of seq 08:
+
+| stage | peak alloc MB | time p50 | p99−p50 |
+|---|---|---|---|
+| `range_image` | **14.30** | 34.46 | 3.11 |
+| `transform` | **10.87** | 3.85 | 0.81 |
+| `cleanup` | **9.61** | 30.00 | 7.67 |
+| `reflectivity` | 6.56 | 5.30 | 3.17 |
+| `fuse` | 5.62 | 5.30 | 0.99 |
+| `ground` | 4.75 | 21.31 | **8.85** |
+| `scatter` | 4.56 | 8.32 | 0.94 |
+| `semantics` | 2.17 | 0.86 | 0.18 |
+| `motion` | 0.87 | 0.14 | 0.08 |
+| `shift` | 0.07 | 0.87 | 0.70 |
+| **`bin`** | **0.04** | 7.88 | 0.75 |
+| **total per frame** | **59.40 MB** | | |
+
+### Three things worth taking from this
+
+**1. The pipeline allocates ~59 MB per frame.** At 10 Hz that is ~594 MB/s of
+churn. `transform`'s 10.86 MB is under a fifth of it.
+
+**2. `bin` at 0.04 MB is the control, and it is a good one.** `bin` is on the grid
+path, which *is* covered by
+`test_the_two_grid_allocations_stay_fixed` — and it allocates essentially nothing,
+while every uncovered perception stage allocates 2–14 MB. **The invariant works
+where it is enforced.** That is the clearest possible argument for R-g, extending
+it to the perception half.
+
+**3. Allocation is *a* mechanism, not *the* mechanism.** Rank correlation between
+per-stage allocation and per-stage p99−p50 is **+0.64** (Pearson +0.37) —
+supportive but not decisive, and two rows break the pattern outright:
+
+- **`ground` has the largest spread (8.85 ms) on modest allocation (4.75 MB).**
+  Its tail is most likely inside the Patchwork++ C++ extension, where none of this
+  applies. It will not yield to an allocation fix.
+- **`range_image` is the biggest allocator (14.30 MB) with a middling spread.**
+
+### [!] The instrument perturbs what it measures
+
+`tracemalloc` hooks every allocation, which both inflates absolute times and
+appears to **smooth the very spikes under investigation** — `transform`'s spread
+reads 0.81 ms here against **22.14 ms** in the uninstrumented probe. So the
+correlation above is computed on a compressed tail and should be read as
+*suggestive of ranking*, not as a measurement of effect size. The allocation
+column is exact; the timing column, under this instrument, is not comparable to
+§5's.
+
+This is why `transform` was confirmed by an isolated A/B (§6) rather than by this
+table. **Any further stage should be confirmed the same way** — allocation-free
+arm against as-shipped arm, on identical preloaded data, without `tracemalloc`
+running.
+
+### So the next step for R-h
+
+`cleanup` is the better target than `ground`: 9.61 MB allocated, 7.67 ms spread,
+and it is **our own numpy** rather than a C++ extension, so the same
+preallocation A/B that settled `transform` can be run against it directly.
+`ground` should be treated as a separate problem with a different cause.
+
 ## 9. Reproduce
 
 ```sh
