@@ -16,7 +16,9 @@ with only numpy + pypatchworkpp. MEASUREMENT ONLY.
 Reads velodyne .bin directly and applies the same sensor height ground.py uses,
 so the number is comparable to the 20-21 ms figure in the latency report.
 """
-import glob, sys, time
+import glob
+import sys
+import time
 import numpy as np
 import pypatchworkpp as pw
 
@@ -28,7 +30,9 @@ files = sorted(glob.glob(ROOT + "/*.bin"))[:N]
 scans = [np.fromfile(f, dtype=np.float32).reshape(-1, 4)[:, :3].astype(np.float64)
          for f in files]
 
-p = pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+p = pw.Parameters()
+p.sensor_height = SENSOR_HEIGHT_M
+p.verbose = False
 est = pw.patchworkpp(p)
 for s in scans[:3]:
     est.estimateGround(s)
@@ -36,7 +40,8 @@ reps = []
 for _ in range(3):
     ts = []
     for s in scans:
-        t0 = time.perf_counter(); est.estimateGround(s)
+        t0 = time.perf_counter()
+        est.estimateGround(s)
         ts.append((time.perf_counter() - t0) * 1e3)
     reps.append(float(np.median(ts)))
 print(f"RESULT version={getattr(pw,'__version__','?')} "

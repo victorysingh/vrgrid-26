@@ -22,7 +22,8 @@ import sys
 import numpy as np
 from vrgrid.eval.plan_regret import common_support
 
-Z = np.load(sys.argv[1]); BITS = 0b000110
+Z = np.load(sys.argv[1])
+BITS = 0b000110
 
 class Fake:
     cell_m, x0_m, y0_m = 0.25, 0.0, 0.0

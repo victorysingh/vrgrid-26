@@ -27,7 +27,9 @@ PUB = {"07": [(103182, 1.78), (50153, 3.60), (12703, 5.91)],
 _ORIG = ground._get_estimator
 
 def build():
-    p = _pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+    p = _pw.Parameters()
+    p.sensor_height = SENSOR_HEIGHT_M
+    p.verbose = False
     return _pw.patchworkpp(p)
 
 def run(seq, mode):

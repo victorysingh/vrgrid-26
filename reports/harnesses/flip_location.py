@@ -71,7 +71,8 @@ for pts, raw, _ in loader.scans(SEQ, max_frames=N):
 
 a, b = est(False), est(True)
 for p, _ in scans[:3]:
-    a.estimateGround(p); b.estimateGround(p)
+    a.estimateGround(p)
+    b.estimateGround(p)
 
 tot = fl = 0
 g2n = n2g = 0
@@ -86,19 +87,23 @@ for pts, sem in scans:
     n = len(pts)
     ma, mb = mask_of(a, pts, n), mask_of(b, pts, n)
     f = ma != mb
-    tot += n; fl += int(f.sum())
-    g2n += int((ma & ~mb).sum()); n2g += int((~ma & mb).sum())
+    tot += n
+    fl += int(f.sum())
+    g2n += int((ma & ~mb).sum())
+    n2g += int((~ma & mb).sum())
 
     for c in np.unique(sem):
         sel = sem == c
         e = per_class.setdefault(int(c), [0, 0])
-        e[0] += int(sel.sum()); e[1] += int(f[sel].sum())
+        e[0] += int(sel.sum())
+        e[1] += int(f[sel].sum())
 
     r = np.hypot(pts[:, 0], pts[:, 1])
     bi = np.digitize(r, band_edges) - 1
     for i in range(len(band)):
         s = bi == i
-        band[i, 0] += s.sum(); band[i, 1] += f[s].sum()
+        band[i, 0] += s.sum()
+        band[i, 1] += f[s].sum()
 
     # local slope from a 2 m mean-height grid over shipped-ground points only
     gx = np.floor(pts[:, 0] / 2.0).astype(np.int64)
@@ -109,12 +114,14 @@ for pts, sem in scans:
     ix, iy = gx - ox, gy - oy
     gp = ma
     np.add.at(zs, (ix[gp], iy[gp]), 0)          # touch cells so they exist
-    acc = np.zeros((W, H)); cnt = np.zeros((W, H))
+    acc = np.zeros((W, H))
+    cnt = np.zeros((W, H))
     np.add.at(acc, (ix[gp], iy[gp]), pts[gp, 2])
     np.add.at(cnt, (ix[gp], iy[gp]), 1)
     with np.errstate(invalid="ignore"):
         zs = np.where(cnt > 0, acc / np.maximum(cnt, 1), np.nan)
-    dzx = np.full_like(zs, np.nan); dzy = np.full_like(zs, np.nan)
+    dzx = np.full_like(zs, np.nan)
+    dzy = np.full_like(zs, np.nan)
     dzx[1:-1, :] = (zs[2:, :] - zs[:-2, :]) / 4.0
     dzy[:, 1:-1] = (zs[:, 2:] - zs[:, :-2]) / 4.0
     grad = np.hypot(np.nan_to_num(dzx), np.nan_to_num(dzy))
@@ -122,7 +129,8 @@ for pts, sem in scans:
     si = np.digitize(pslope, slope_edges) - 1
     for i in range(len(slope)):
         s = si == i
-        slope[i, 0] += s.sum(); slope[i, 1] += f[s].sum()
+        slope[i, 0] += s.sum()
+        slope[i, 1] += f[s].sum()
 
     # curb proxy: 0.5 m cells holding both a road-ish and a sidewalk-ish label
     cx = np.floor(pts[:, 0] / 0.5).astype(np.int64)
@@ -132,8 +140,10 @@ for pts, sem in scans:
     walkk = np.unique(key[np.isin(sem, list(WALKISH))])
     both = np.intersect1d(roadk, walkk, assume_unique=True)
     isb = np.isin(key, both)
-    curb[1, 0] += isb.sum();  curb[1, 1] += f[isb].sum()
-    curb[0, 0] += (~isb).sum(); curb[0, 1] += f[~isb].sum()
+    curb[1, 0] += isb.sum()
+    curb[1, 1] += f[isb].sum()
+    curb[0, 0] += (~isb).sum()
+    curb[0, 1] += f[~isb].sum()
 
 print(f"\nseq {SEQ}, {len(scans)} frames, {tot:,} points")
 print(f"OVERALL flip rate: {fl/tot*100:.2f}%   "

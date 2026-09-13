@@ -9,7 +9,8 @@
 """(b) Warm-up on the TRUE whole-frame metric -- perception + engine.step,
 exactly as timing_table.run_real defines `total`. MEASUREMENT ONLY.
 """
-import sys, time
+import sys
+import time
 import numpy as np
 from vrgrid.grid.schedule import load
 from vrgrid.run.__main__ import iter_pipeline
@@ -22,14 +23,16 @@ ts = []
 while True:
     t0 = time.perf_counter()
     f = next(frames, None)
-    if f is None: break
+    if f is None:
+        break
     engine.step(f)
     ts.append((time.perf_counter() - t0) * 1e3)
 a = np.array(ts)
 print(f"  {len(a)} whole frames (perception + engine.step)\n")
 print(f"  {'window':<22}{'n':>5}{'p50':>9}{'p99':>9}")
 for lo, hi in [(0,1),(1,21),(21,51),(51,101),(101,151),(151,201),(51,len(a)),(0,len(a))]:
-    if hi > len(a) or lo >= hi: continue
+    if hi > len(a) or lo >= hi:
+        continue
     w = a[lo:hi]
     tag = f"[{lo}:{hi}]" + (" <- 50+ discarded" if lo==51 and hi==len(a) else
                             " <- frame 0 only" if hi-lo==1 else "")

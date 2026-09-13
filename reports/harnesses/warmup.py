@@ -12,7 +12,8 @@ Times each frame individually through the real pipeline, then reports p50/p99
 over successive windows. If 'warm' means anything beyond frame ~1, a long tail
 of frames should be measurably cheaper than an early window.
 """
-import sys, time
+import sys
+import time
 import numpy as np
 from vrgrid.run.__main__ import iter_pipeline
 
@@ -23,13 +24,15 @@ while True:
     t0 = time.perf_counter()
     f = next(frames, None)
     dt = (time.perf_counter() - t0) * 1e3
-    if f is None: break
+    if f is None:
+        break
     ts.append(dt)
 a = np.array(ts)
 print(f"  {len(a)} frames timed end-to-end (includes load)\n")
 print(f"  {'window':<18}{'n':>5}{'p50':>9}{'p99':>9}{'mean':>9}")
 for lo, hi in [(0,1),(1,20),(20,50),(50,100),(100,150),(150,200),(200,len(a)),(50,len(a))]:
-    if hi > len(a) or lo >= hi: continue
+    if hi > len(a) or lo >= hi:
+        continue
     w = a[lo:hi]
     tag = f"[{lo}:{hi}]" + (" <- 50+ warm" if lo == 50 and hi == len(a) else "")
     print(f"  {tag:<18}{len(w):>5}{np.median(w):>9.2f}{np.percentile(w,99):>9.2f}{w.mean():>9.2f}")

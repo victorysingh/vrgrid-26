@@ -17,7 +17,9 @@ scans = [np.asarray(p, dtype=np.float64)
          for p, _, _ in loader.scans("08", max_frames=6)]
 
 def est():
-    p = _pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+    p = _pw.Parameters()
+    p.sensor_height = SENSOR_HEIGHT_M
+    p.verbose = False
     return _pw.patchworkpp(p)
 
 def mask(e, s):
@@ -44,6 +46,8 @@ print(f"  same history twice (reproducible?)  : {(warm != warm2).sum():,} points
 print(f"  ground count  virgin {cold.sum():,}   warm {warm.sum():,}")
 # and repeated calls on the SAME scan with the SAME estimator
 e3 = est()
-a1 = mask(e3, B); a2 = mask(e3, B); a3 = mask(e3, B)
+a1 = mask(e3, B)
+a2 = mask(e3, B)
+a3 = mask(e3, B)
 print(f"  same scan, same estimator, 3x calls : "
       f"1v2 {(a1 != a2).sum():,} differ, 2v3 {(a2 != a3).sum():,} differ")

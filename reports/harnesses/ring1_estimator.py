@@ -42,7 +42,6 @@ here.
 """
 import sys
 
-import numpy as np
 import pypatchworkpp as _pw
 from vrgrid.eval.harness import build_gridmap, real_scans, run_sequence
 from vrgrid.eval.metrics import height_rmse_per_ring

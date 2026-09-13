@@ -15,7 +15,9 @@ from vrgrid.perception import loader
 from vrgrid.perception.transforms import SENSOR_HEIGHT_M
 
 def est():
-    p = _pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+    p = _pw.Parameters()
+    p.sensor_height = SENSOR_HEIGHT_M
+    p.verbose = False
     return _pw.patchworkpp(p)
 
 def mask(e, s):
@@ -33,7 +35,8 @@ for seq in ("07", "08", "00"):
     p1 = [mask(e, s) for s in scans]
     p2 = [mask(e, s) for s in scans]
     per = [int((a != b).sum()) for a, b in zip(p1, p2)]
-    tot = sum(len(s) for s in scans); d = sum(per)
+    tot = sum(len(s) for s in scans)
+    d = sum(per)
     hit = [i for i, n in enumerate(per) if n]
     rng = f"{min(hit)}-{max(hit)}" if hit else "none"
     print(f"  {seq:<5}{tot:>12,}{d:>9,}{d/tot*100:>8.3f}%"

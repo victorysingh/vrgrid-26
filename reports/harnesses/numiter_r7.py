@@ -29,7 +29,6 @@ MEASUREMENT ONLY. ground.py untouched.
 """
 import sys
 
-import numpy as np
 import pypatchworkpp as _pw
 from vrgrid.eval.harness import (build_gridmap, final_vehicle_xy, real_scans,
                                  run_sequence)

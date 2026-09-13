@@ -24,7 +24,9 @@ BEHIND, Y0, N = -11.0, -5.5, 44
 OUT = sys.argv[1]
 
 def install(c):
-    p = _pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+    p = _pw.Parameters()
+    p.sensor_height = SENSOR_HEIGHT_M
+    p.verbose = False
     if c == "proposed":
         p.num_iter, p.enable_RNR, p.enable_RVPF = 2, False, False
     ground._estimator = _pw.patchworkpp(p)

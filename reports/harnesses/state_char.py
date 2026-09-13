@@ -17,7 +17,9 @@ scans = [np.asarray(p, dtype=np.float64)
          for p, _, _ in loader.scans("08", max_frames=12)]
 
 def est():
-    p = _pw.Parameters(); p.sensor_height = SENSOR_HEIGHT_M; p.verbose = False
+    p = _pw.Parameters()
+    p.sensor_height = SENSOR_HEIGHT_M
+    p.verbose = False
     return _pw.patchworkpp(p)
 
 def mask(e, s):

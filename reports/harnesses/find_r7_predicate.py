@@ -71,7 +71,7 @@ for name, f in preds.items():
 
 print(f"loaded {len(Z.files)} arrays; support: "
       + ", ".join(f"{s}={int(support(s,'shipped').sum()):,}" for s in SEQS))
-print(f"\ntargets: " + "  ".join(f"{s} {TARGET[s]}" for s in SEQS))
+print("\ntargets: " + "  ".join(f"{s} {TARGET[s]}" for s in SEQS))
 
 if hits:
     print(f"\nEXACT MATCHES ({len(hits)}):")

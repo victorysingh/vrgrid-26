@@ -28,7 +28,6 @@ from vrgrid.eval.plan_regret import (
     common_support,
     costmap_from_gridmap,
     costmap_from_reference,
-    restrict,
 )
 
 PLAN_BEHIND_M, PLAN_N, PLAN_Y0_M = -11.0, 44, -5.5
