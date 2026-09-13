@@ -129,7 +129,10 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
                 points, semantic, use_patchworkpp=use_patchworkpp)
 
         with stage("reflectivity"):
-            refl = reflectivity.normalise(ri)
+            # with_incidence=False: cos_inc and flags are discarded just below
+            # and PerceptionFrame stores neither, so skip computing them. rho8 is
+            # unchanged by construction on the KITTI path (tests pin it).
+            refl = reflectivity.normalise(ri, with_incidence=False)
             rho8, _ = reflectivity.scatter_to_points(refl, inv)
             if len(rho8) < len(points):  # pad points that never projected
                 rho8 = np.concatenate([rho8, np.zeros(len(points) - len(rho8), np.uint8)])

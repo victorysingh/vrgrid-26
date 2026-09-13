@@ -111,6 +111,7 @@ def normalise(
     range_compensated: bool = True,
     incidence_compensated: bool = True,
     rho_full_scale: float | None = None,
+    with_incidence: bool = True,
 ) -> Reflectivity:
     """Per-pixel reflectivity byte from a range image (math §10.3 eq 31).
 
@@ -123,19 +124,32 @@ def normalise(
             False -> apply `/ max(cos, COS_INC_MIN)` (eq 31).
         rho_full_scale: rho_hat value mapped to byte 255. Default: 1.0 when both
             compensations are on (rho_hat = I in [0, 1]), else RHO_SATURATION.
+        with_incidence: True (default) computes cos_inc and flags as always.
+            False skips `incidence_cos` entirely and returns cos_inc=None,
+            flags=None. Only valid with incidence_compensated=True, where rho_hat
+            never uses cos_inc -- so rho8 and rho_hat are unchanged by
+            construction. [!] Exists because the frame loop discards both fields,
+            and computing them cost ~10 image-sized float64 arrays per frame (two
+            np.roll, a cross product, two norms) for nothing.
 
     Returns:
         Reflectivity. Pixels with no return get rho8 = 0, rho_hat = NaN,
         FLAG_NO_NORMAL. On the raw-power path, pixels with no surface normal also
         get rho8 = 0 (the `/cos` term needs one).
     """
+    if not with_incidence and not incidence_compensated:
+        raise ValueError("with_incidence=False requires incidence_compensated=True: "
+                         "the raw-power path divides rho_hat by cos_inc")
+
     rng = range_image[:, :, 0].astype(np.float64)
     intensity = range_image[:, :, 4].astype(np.float64)
-    cos_inc, has_normal = incidence_cos(range_image)
-
-    flags = np.zeros(rng.shape, dtype=np.uint8)
-    flags[~has_normal] |= FLAG_NO_NORMAL
-    flags[has_normal & (cos_inc < COS_INC_MIN)] |= FLAG_GRAZING
+    if with_incidence:
+        cos_inc, has_normal = incidence_cos(range_image)
+        flags = np.zeros(rng.shape, dtype=np.uint8)
+        flags[~has_normal] |= FLAG_NO_NORMAL
+        flags[has_normal & (cos_inc < COS_INC_MIN)] |= FLAG_GRAZING
+    else:
+        cos_inc, has_normal, flags = None, None, None
 
     rho_hat = intensity.copy()
     if not range_compensated:
@@ -174,9 +188,11 @@ def scatter_to_points(result: Reflectivity, inverse_index: np.ndarray) -> tuple[
     """
     n = int(inverse_index.max()) + 1 if inverse_index.max() >= 0 else 0
     rho8 = np.zeros(n, dtype=np.uint8)
-    flags = np.full(n, FLAG_NO_NORMAL, dtype=np.uint8)
     filled = inverse_index >= 0
     src = inverse_index[filled]
     rho8[src] = result.rho8[filled]
+    if result.flags is None:            # normalise(..., with_incidence=False)
+        return rho8, None
+    flags = np.full(n, FLAG_NO_NORMAL, dtype=np.uint8)
     flags[src] = result.flags[filled]
     return rho8, flags
