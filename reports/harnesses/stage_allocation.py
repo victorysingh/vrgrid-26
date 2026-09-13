@@ -56,7 +56,9 @@ engine = MapEngine(load("5/10/20/40"), max_points=120_000, timer=t)
 tracemalloc.start()
 Timer.stage = _measuring_stage
 try:
-    frames = iter(iter_pipeline(SEQ, N + 1, timer=t))
+    # reuse_buffers=True: the same path scripts/timing_table.py times (12613df).
+    # Without it the transform row measures the old, allocating path.
+    frames = iter(iter_pipeline(SEQ, N + 1, timer=t, reuse_buffers=True))
     k = 0
     while True:
         f = next(frames, None)
