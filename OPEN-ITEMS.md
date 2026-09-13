@@ -50,7 +50,6 @@ estimators making one pass each agree exactly, 0 of 1.48 M points differing.
 
 | # | item | notes |
 |---|---|---|
-| **R-b** | **Locate the p99 cause.** p99 is 127–146 ms against a 100 ms budget and **no parameter, warm-up length, frame count or library version moved it.** p50 is within reach; p99's cause has never been isolated. | The real 10 Hz blocker. Nothing measured so far explains it. |
 | **R-d** | **`ruff` E741 in `tests/test_metrics.py:472`** (ambiguous `l`). Pre-existing on `origin/main` from `014d388`, unrelated to any of this week's work, still red. | One-line fix, not my lane (tests/). |
 
 ---
@@ -72,6 +71,7 @@ estimators making one pass each agree exactly, 0 of 1.48 M points differing.
 | **R-f** — seq 00 ring-1 residual | **CLOSED — and it was the singleton after all**, carrying state across *sequences* rather than only across passes. The published harness measures 07, 08, 00 in one process, so seq 00's estimator holds ~160 frames of the other two. Every published R1 figure then reproduces exactly, 41,892 @ 6.77 included. Closed within minutes of R-a committing the harness, after resisting two investigations. | `reports/ring1-reproduction-investigation.md` §7 |
 | **R-e** — 99.87% vs 99.5% | **RESOLVED by recomputation, not by assumption.** 99.5% is the RADIAL term of `sih-math.md` eq. (4) alone; the full product is 0.001327, i.e. **99.87%** dead cells. README was right; `master-v4.md` and Hriday's R2 memo were corrected. | `3a43c19` |
 | **R-c** — stdout UTF-8 | **MEASURED AND PROPOSED, not applied.** Scope is far larger than thought: **15 of 20** scripts hold a cp1252-unencodable char and **12 of 20 crash on `--help`**. Two candidates verified; `PYTHONUTF8=1` recommended (zero source edits). Needs a decision because it touches `demo.sh`, CI and a doc — and because the one *central* fix is blocked by the `include/vrgrid/` freeze. | `pending-review/stdout-utf8-at-entry.md` |
+| **R-b** — the p99 tail | **LOCALISED, not fixed.** GC ruled out (0.00% of runtime, 0 of the 8 worst frames). Data-dependence ruled out (worst-frame overlap = chance). Thermal ruled out (drift plateaus, 28 s run). Stage attribution depends on page cache: cold `load` 60%, warm **`transform` 84%** — and the warm tail is **allocation**, 10.86 MB per call, 25x smaller tail when preallocated. Fixing it gives ~113 ms p99, still over 100. Next: `ground` (42%), `cleanup` (32%). | `reports/r-b-p99-tail-investigation.md`; proposal `pending-review/transform-points-allocation.md` |
 
 ---
 
