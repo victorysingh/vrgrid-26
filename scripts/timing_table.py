@@ -543,9 +543,29 @@ def main() -> None:
                     help="--seq only: clip semantic ids to 15 so fusion's 4-bit "
                          "candidate accepts them (math §10.2)")
     ap.add_argument("--alloc", action="store_true",
-                    help="also report transient bytes per frame per stage "
-                         "(separate pass; tracemalloc distorts latency)")
+                    help="also report transient bytes per frame per stage, for the "
+                         "MAPPING BACK END only (separate pass; tracemalloc "
+                         "distorts latency). NOT supported with --seq: the "
+                         "perception front end is not instrumented.")
     args = ap.parse_args()
+
+    # --alloc is implemented only on the synthetic path: measure_alloc is called
+    # from this function, never from run_real. So with --seq it used to be
+    # SILENTLY IGNORED -- the table printed with no MB/frame column at all, and
+    # the back-end-only figure got quoted as a whole-frame number. That is how
+    # "8.15 -> 1.31 MB/frame" reached the README unqualified. Fail instead.
+    if args.alloc and args.seq is not None:
+        raise SystemExit(
+            "--alloc is not supported with --seq; front-end allocation is not "
+            "yet instrumented.\n"
+            "  --alloc reports the MAPPING BACK END only (bin, scatter, fuse, "
+            "cleanup, pyramid, shift).\n"
+            "  The perception stages (load, transform, range_image, semantics, "
+            "motion) are NOT measured,\n"
+            "  and on real seq 08 they allocate ~39.5 MB/frame -- see "
+            "reports/r-b-p99-tail-investigation.md.\n"
+            "  Run --alloc WITHOUT --seq for the back-end figure, and do not "
+            "quote it as a whole-frame number.")
 
     sched = load(args.schedule)
     if args.speed_mps is None:

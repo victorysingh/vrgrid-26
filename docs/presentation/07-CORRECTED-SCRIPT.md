@@ -118,8 +118,9 @@ The design decisions are the parallel ones. Structure-of-arrays, so a kernel
 reading one field touches contiguous memory. Integer fixed-point accumulation
 rather than float atomics — because IEEE addition isn't associative and atomic
 adds complete out of order, so a float map changes between runs and you can't
-bisect a bug whose location moves. Zero allocation in the frame loop, which took
-us from 8.15 to 1.31 megabytes per frame. And a toroidal ego-motion shift that
+bisect a bug whose location moves. Zero allocation in this back end's frame loop,
+which took us from 8.15 to 1.31 megabytes per frame — that is the mapping half;
+the perception front end is not instrumented yet and does allocate. And a toroidal ego-motion shift that
 moves the origin instead of the data: 0.04 milliseconds against 15.2 for the
 obvious version.
 

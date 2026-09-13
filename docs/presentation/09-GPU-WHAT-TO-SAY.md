@@ -63,8 +63,9 @@ about the fidelity of a reference implementation, not about a kernel that runs.
 > the kernels. Every number we quote is measured on that CPU path.*
 >
 > *The design decisions are the parallel ones. Structure-of-arrays, so a kernel
-> reading one field touches contiguous memory. Zero allocation in the frame loop
-> — that took us from 8.15 megabytes per frame to 1.31. A toroidal ego-motion
+> reading one field touches contiguous memory. Zero allocation in this back end's
+> frame loop — that took us from 8.15 megabytes per frame to 1.31, for the mapping
+> half; the perception front end is not instrumented yet.* A toroidal ego-motion
 > shift that moves the origin instead of the data: 0.04 milliseconds against 15.2
 > for the obvious version. And two scatter paths, a sorted one and an atomic one,
 > asserted bit-identical against each other — if they ever diverge, the
@@ -443,7 +444,8 @@ section 5 in full and runs about 45 seconds.*
 > accumulation rather than float atomics — because IEEE addition isn't
 > associative and atomic adds complete out of order, so a float map changes
 > between runs and you can't bisect a bug whose location moves. Zero allocation
-> in the frame loop, which took us from 8.15 megabytes per frame to 1.31. And a
+> in this back end's frame loop, which took us from 8.15 megabytes per frame to
+> 1.31 — the mapping half; the front end is not instrumented yet. And a
 > toroidal ego-motion shift that moves the origin instead of the data: 0.04
 > milliseconds against 15.2 for the obvious version.*
 >
@@ -465,7 +467,7 @@ section 5 in full and runs about 45 seconds.*
 | ❌ Drop | ✅ Add |
 |---|---|
 | 2.45 ms rebuild | **89.18 / 100.43 ms** — frame p50 / p99, 100 ms budget |
-| | **8.15 → 1.31 MB/frame** — allocation removed from the loop |
+| | **8.15 → 1.31 MB/frame** — allocation removed from the **back end's** loop (front end not instrumented; CI test covers retained growth, not churn) |
 | | **0.04 vs 15.2 ms** — toroidal shift vs O(area) scroll |
 | | **6.65 vs 20.56 ms** — sorted vs atomic scatter, p50 at 120k returns |
 | | **1408× / 541×** — FRNet scatter_reduce on CUDA |

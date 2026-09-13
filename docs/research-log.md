@@ -355,7 +355,9 @@ There were **three** copies of the 19-class ordering — `configs/frnet.yaml`, `
 
 Measured, 120,000 returns, same machine: **6.962 MB/frame → 0.002 MB/frame, and 13.64 → 12.35 ms p50** (9% faster — one pass beats four plus four compacting copies). `fusion.occupancy_state` gained an `out=`/`scratch=` path: **8.19 MB/call → 0**, and even the unpreallocated path fell to 2.73 MB, because `np.where` picking between two Python ints chooses int64 and one int64 array over 910,000 slots is 7.28 MB — for a uint8 answer.
 
-Whole frame, from `scripts/timing_table.py --alloc`: **8.15 → 1.31 MB/frame**, p99 **74.7 → 49.4 ms**. `engine.step()` peaks at 1.15 MB and is now under a flat cap rather than one that subtracted the two grid allocations.
+Mapping back end, from `scripts/timing_table.py --alloc`: **8.15 → 1.31 MB/frame**, p99 **74.7 → 49.4 ms**.
+
+> *Corrected 2026-09-13: this read "Whole frame". It is the mapping back end on the synthetic path — `--alloc` is only implemented in `main()` and is **silently ignored with `--seq`**, and the script's own output lists `load`, `transform`, `range_image`, `semantics` and `motion` as "not in the subtotal above". On real seq 08 the perception half allocates ~39.5 MB/frame and the whole frame ~59.4 MB. Separately, the CI test behind the claim measures **retained growth, not churn**, so an allocate-and-free within one frame does not trip it. Same class of mislabelling as the 80.78 ms latency figure: a back-half measurement from this script's synthetic path, recorded as whole-frame.* `engine.step()` peaks at 1.15 MB and is now under a flat cap rather than one that subtracted the two grid allocations.
 
 **⚑ Two allocations that no profile names.** `np.take(table, idx, out=)` builds a full-length bounds-check array under its default `mode="raise"` — 0.96 MB a call, six calls a frame; `mode="clip"` is allocation-free and 5× faster, and is safe here only because the ring index is explicitly clamped first. And `int64 += bool` casts through numpy's fixed 64 kB internal buffer; a masked scalar increment avoids it.
 

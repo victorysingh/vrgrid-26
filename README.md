@@ -301,9 +301,32 @@ It is written the way GPU code is written, and each decision is measured:
   and associative, which is why the determinism test is CI-blocking. (That test
   is currently **failing** for a reason unrelated to the accumulator — see
   [Determinism](#determinism).)
-* **Zero allocation in the frame loop** — 8.15 → 1.31 MB/frame, p99 74.7 → 49.4 ms.
+* **Zero allocation in the mapping back end's frame loop** — 8.15 → 1.31 MB/frame,
+  p99 74.7 → 49.4 ms. †
 * **A device seam in the allocator** (`allocators.array_module()`), so the arrays
   can move to cupy without touching the kernels.
+
+> † **Two limits on that allocation figure, and they are different limits.**
+>
+> **(a) It covers the mapping back end only.** `bin`, `scatter`, `fuse`,
+> `cleanup`, `shift` — not the perception front end. The figure comes from
+> `timing_table.py --alloc`, whose own output lists `load`, `transform`,
+> `range_image`, `semantics` and `motion` as *"not in the subtotal above"*.
+> Measured on real seq 08, the **perception half allocates ~39.5 MB/frame** and
+> the **whole frame ~59.4 MB/frame** of transient churn — `transform_points`
+> alone is 10.86 MB. So the back end really is allocation-free; the pipeline is
+> not. See `reports/r-b-p99-tail-investigation.md`.
+>
+> **(b) The CI test behind it measures RETAINED growth, not churn.**
+> `test_no_allocation_inside_the_frame_loop` compares
+> `tracemalloc.get_traced_memory()[0]` across frames, so it catches a buffer that
+> grows with frame count — the failure that would make the compile-time bound
+> false. A temporary allocated **and freed** inside one frame does not move it and
+> will not fail the test. Its own docstring says so.
+>
+> Both gaps are real and neither implies the other. The back-end achievement is
+> genuine and gated; the unqualified phrase *"in the frame loop"* was wider than
+> either the code or the metric it rests on.
 
 Porting to the device is the current cycle's work, tracked in
 `docs/gpu-lane/03-CUDA-PORT-PLAN.md`. The determinism guarantee is expected to
@@ -580,7 +603,14 @@ Resolution is driven by both sensor geometry and semantic importance.
 
 The complete grid is preallocated at startup.
 
-No per-frame allocation is required.
+**No per-frame allocation is required to hold the map** — the 8.94 MB footprint
+is fixed and no buffer grows with frame count, which is the property the memory
+bound rests on and is CI-gated.
+
+This is **not** a claim that the pipeline allocates nothing per frame. The
+perception front end allocates ~39.5 MB/frame of transient working memory on real
+seq 08 (~59.4 MB whole-frame), none of it retained. See the note under
+[Compute](#compute).
 
 ### 3. Uncertainty-preserving coarsening
 

@@ -183,7 +183,7 @@ the kernel," and there isn't one. That is a bad thirty seconds.
 | Structure-of-arrays | coalesced access | layout, no runtime cost |
 | int32 fixed-point, never float atomics | float atomics are non-associative → non-reproducible maps | determinism test is CI-blocking |
 | `scatter_sorted` vs `scatter_atomic`, bit-identical | sort beats contention | p50 6.65 vs 20.56 ms @ 120k returns |
-| Zero allocation in frame loop | allocation is the p99 | 8.15 → 1.31 MB/frame, p99 74.7 → 49.4 ms |
+| Zero allocation in the **back end's** frame loop | allocation is the p99 | 8.15 → 1.31 MB/frame, p99 74.7 → 49.4 ms — **back end only** (synthetic path); the perception front end allocates ~39.5 MB/frame on real seq 08, and the CI test measures **retained growth, not churn** |
 | Toroidal O(perimeter) shift | O(area) scroll is the naive version | 0.04 ms vs 15.2 ms |
 | `np.take(mode="clip")`, intp indices | bounds-check copies | 3.2 MB → 1 KB/frame |
 | Page-touch at startup | first-frame faults land in p99 | 29.06 claimed / 28.82 resident |

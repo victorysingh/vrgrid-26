@@ -352,13 +352,23 @@ literal reading of the spec). If they diverge, the optimisation is the bug. At
 
 ### 6.3 The optimisation record
 
+> **Read the two rows marked "mapping back end" as exactly that.** Both read
+> "Whole frame" until 2026-09-13 and neither was. They come from
+> `timing_table.py --alloc`, which instruments the back end only and whose own
+> output names `load`, `transform`, `range_image`, `semantics` and `motion` as
+> *"not in the subtotal above"*. Two separate caveats follow:
+> **(a) code** — the perception front end is not covered, and allocates
+> ~39.5 MB/frame on real seq 08 (~59.4 MB whole-frame); **(b) metric** — the CI
+> test measures retained growth across frames, not per-frame churn, so an
+> allocate-and-free inside one frame does not trip it.
+
 | Change | Before | After |
 |---|---|---|
 | Single-pass `bin_points` (no per-ring loop) | 6.962 MB/frame, 13.64 ms | **0.002 MB/frame, 12.35 ms** |
 | `occupancy_state` with `out=`/`scratch=` | 8.19 MB/call | **0** |
 | `np.take` with intp indices + `mode="clip"` | 3.2 MB/frame | **1 KB** |
-| Whole frame, allocation | 8.15 MB/frame | **1.31 MB/frame** |
-| Whole frame, p99 | 74.7 ms | **49.4 ms** |
+| Mapping back end, allocation | 8.15 MB/frame | **1.31 MB/frame** |
+| Mapping back end, p99 | 74.7 ms | **49.4 ms** |
 | Toroidal shift vs annulus gather | 15.2 ms | **0.04 ms** |
 | Refinement pool release (flaw E1) | 512/512 full, 15,791 refusals | **62/512, 0 refusals** |
 

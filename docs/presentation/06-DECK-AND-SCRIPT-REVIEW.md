@@ -48,7 +48,7 @@ text. You have real, measured, systems engineering here. It just isn't CUDA.
 
 > **5. DETERMINISTIC PARALLEL BACK END**
 > Structure-of-arrays for coalesced access · int32 fixed-point accumulation, never
-> float atomics · zero allocation in the frame loop (8.15 → 1.31 MB/frame) ·
+> float atomics · zero allocation in this back end's frame loop (8.15 → 1.31 MB/frame; front end not instrumented) ·
 > toroidal O(perimeter) ego-shift, 0.04 ms against 15.2 ms for an O(area) scroll ·
 > two scatter paths asserted bit-identical, sorted p50 6.65 ms vs atomic 20.56 ms
 
