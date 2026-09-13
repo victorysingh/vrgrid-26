@@ -1,7 +1,35 @@
-# Morning summary 2 — overnight run, 2026-09-13
+# Morning summary 2 — overnight run, 2026-09-13 / 14
 
-**All eight list items addressed. Nine commits, all local, nothing pushed.**
-Two items are blocked on things only you can decide; both are in §3.
+> # [!] READ FIRST — this machine is not currently trustworthy for timing work
+>
+> **Restart it, or leave it idle for an extended period, before running anything
+> timing-sensitive on it.**
+>
+> Measured near the end of the session, at **2% CPU load**:
+>
+> | | |
+> |---|---|
+> | CPU clock | **1520 MHz against a 2400 MHz base — 37% down** |
+> | commit charge | **23.61 GB against 15.73 GB physical** — ~8 GB over-committed |
+> | free physical | 2.2 GB |
+>
+> The effect is not subtle. `reports/harnesses/ground_cost.py` read **21.01 ms**
+> early in the session and **93.44 ms** late — *same script, same data, same
+> machine* — a **4.4× drift**.
+>
+> **What this means in practice:**
+> - **Any absolute timing taken late in this session is void.** I did not publish
+>   the `ground` numbers for exactly this reason (§4a).
+> - **A/B ratios measured back-to-back in one process are still good** — a
+>   machine-wide slowdown scales both arms. That is why `transform` (25×) and
+>   `cleanup` (21× / 3.9×) stand.
+> - **Allocation counts are unaffected entirely.** `tracemalloc` counts bytes, not
+>   time, so every MB figure in tonight's work holds regardless.
+> - **This upgraded D8's scope** — see §3.
+
+**All eight list items addressed, plus the follow-on queue: R-g, R-h, R-i and
+D10 STEP 1. 20 commits (`2955b14`..`HEAD`), all local, nothing pushed.** Blocked
+items are in §3.
 
 **The headline:** R-f closed, and it closed *because* R-a was done first — the
 harness that resisted two investigations turned out to contain a three-line `for`
@@ -234,6 +262,25 @@ unprompted is not something I should do on your machine, and the right source is
 a decision — the original checkpoint, or a re-download from the FRNet authors.
 **Tell me where it should come from and the DL item finishes in one run**
 (`--fast-scatter` makes it ~1 minute rather than ~35).
+
+### D8 — SCOPE UPGRADED, and it is no longer "pick a hostname"
+
+D8 was *two hosts disagree, choose a reference*. That is now insufficient:
+**one host varied 4.4× within a single session** (see the banner above). Naming a
+reference machine fixes nothing when the same box gives 21 ms or 93 ms depending
+on clock and memory state.
+
+**Resolving D8 now requires a defined and checked machine state**, at minimum:
+
+1. **CPU clock recorded alongside every figure** — `CurrentClockSpeed` against
+   `MaxClockSpeed`. A 37% downclock is completely invisible in a timing table.
+2. **Commit charge under physical RAM**, checked before *and* after the run.
+3. **A stated warm-up / idle precondition.**
+
+A latency number without its machine state attached is not checkable, whoever's
+host it came from. The corollary is already proven tonight: **prefer controlled
+ratios over headline absolutes** wherever the question allows it, because ratios
+survive this and absolutes do not.
 
 ### D9 / D10 — summarised in §2, detailed in their files
 
