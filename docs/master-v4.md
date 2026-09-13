@@ -48,7 +48,11 @@ For KITTI's HDL-64E (h = 1.73 m, Δφ = 0.427°):
 
 At 50 metres, consecutive laser rings land **ten metres apart** on the road surface. This is not a small correction. It reframes three things:
 
-**It makes your central argument far stronger.** A uniform 5 cm grid at 50 m is not merely wasteful — the ground returns are 10.8 m apart radially, so **99.5% of those cells can never receive a ground return in a single frame.** Uniform high resolution at range is not high resolution. It is an empty array with a confident-looking axis label. Now you can say that with a number.
+**It makes your central argument far stronger.** A uniform 5 cm grid at 50 m is not merely wasteful — the ground returns are 10.8 m apart radially, so **99.87% of those cells cannot receive a ground return in a single frame.**
+
+> *Corrected 2026-09-13: this read 99.5%, which applies only the RADIAL term of `sih-math.md` eq. (4). A cell needs a ring to pass through it **and** an azimuthal sample to land in it, so both factors count: `min(1, 0.05/10.77) x min(1, 0.05/0.175) = 0.001327`, i.e. 99.87% dead, not 99.54%. The full derivation makes the argument stronger, not weaker — 754 dead cells per live one rather than 215.*
+
+Uniform high resolution at range is not high resolution. It is an empty array with a confident-looking axis label. Now you can say that with a number.
 
 **It means the far rings are filled by *ego-motion*, not by the sensor.** As the vehicle drives forward, the ring pattern sweeps across the ground and progressively fills cells that no single frame could reach. This is a genuine property of your system and it has consequences: temporal accumulation is not an optimisation in Rings 2–3, it is the *only* fill mechanism. Single-frame evaluation of the far field is meaningless. Report far-ring metrics as a function of frames-since-first-observation.
 

@@ -86,7 +86,7 @@ VRgrid is a **foveated 2.5D LiDAR mapping system** for autonomous ground vehicle
 **What:** Use a lightweight neural network to fill in the sparse far-ring cells using learned priors about road geometry and scene structure.
 
 **Why it matters:**
-- VRgrid's own analysis shows **99.5% of cells at 50 m are empty in a single frame** due to radial beam divergence ($s_{rad} = r^2 \Delta\phi / h$)
+- VRgrid's own analysis shows **99.87% of cells at 50 m are empty in a single frame**: radial beam divergence ($s_{rad} = r^2 \Delta\phi / h$) gives 10.77 m ring spacing, and the azimuthal term contributes the rest — `sih-math.md` eq. (4) multiplies both. (This read 99.5% until 2026-09-13, which was the radial term alone; the full figure is 754 dead cells per live one rather than 215, so the case below is stronger, not weaker.)
 - Ring 3 (40 cm, 50–100 m) relies entirely on **ring-sweep filling** over time — a prediction model could "pre-fill" ring 3 terrain before the vehicle arrives
 - This directly improves **plan regret** by giving the planner earlier access to far-field traversability
 
@@ -453,7 +453,7 @@ VRgrid is a **foveated 2.5D LiDAR mapping system** for autonomous ground vehicle
 |---|---|---|---|
 | **1** | **Multi-Robot Collaborative Mapping** | VRgrid's flat-array bounded-memory + LoTV merge = natural V2X. No published system does this with foveated 2.5D. | Swarm-SLAM (RA-L 2024), UniV2X (CVPR 2024) |
 | **2** | **Learned Adaptive Resolution Policy** | The math is already in §8 of sih-math.md. Making it online is the research step. Strengthens the headline plan-regret claim. | Psomiadis (ICRA 2024) |
-| **3** | **Neural Scene Completion for Far Rings** | Directly attacks the 99.5%-empty-at-50m limitation. Improves plan regret. | SCPNet (CVPR 2023), OccWorld (CVPR 2024) |
+| **3** | **Neural Scene Completion for Far Rings** | Directly attacks the 99.87%-empty-at-50m limitation. Improves plan regret. | SCPNet (CVPR 2023), OccWorld (CVPR 2024) |
 | **4** | **Solid-State LiDAR Generalization** | Makes VRgrid commercially relevant for India's Livox/Hesai-based AV market. | FAST-LIO2, Point-LIO |
 | **5** | **Evidential Uncertainty Integration** | Upgrade confidence from observation-count to aleatoric/epistemic separation. Mathematically elegant. | EVORA (T-RO 2024) |
 
