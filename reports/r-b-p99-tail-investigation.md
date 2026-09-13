@@ -304,6 +304,66 @@ And a `searchsorted` probe read 51 ms — but it was **not a correct membership
 test**, so that number measured the wrong thing and should not be cited as
 evidence against `searchsorted`; the LUT is simply the right structure.
 
+## 11. [!] `ground` — ATTEMPTED AND INCONCLUSIVE, and the reason matters more
+
+I tried to settle `ground` the same way, and **I am not reporting a conclusion,
+because the instrument failed.** The attempt is recorded because the failure is
+the useful part.
+
+### What went wrong
+
+`reports/harnesses/ground_cost.py` measured Patchwork++ at **21.01 ms p50** earlier
+in the session. Re-run late in the same session, unchanged, on the same data:
+**93.44 ms p50** — a **4.4× slowdown of the same C++ call**, at 2% CPU load.
+
+The machine, measured at that moment:
+
+| | |
+|---|---|
+| CPU clock | **1520 MHz against a 2400 MHz base — 37% down**, at 2% load |
+| commit charge | **23.61 GB against 15.73 GB physical** — ~8 GB over-committed |
+| free physical | 2.2 GB |
+
+So: the CPU had dropped into a low-power/thermal state after hours of sustained
+work, **and** the machine was paging. 37% of clock does not explain 4.4×; the
+paging does the rest.
+
+**Every absolute timing taken in that window is invalid**, including the `ground`
+numbers I measured there (p50 80–91 ms, where the pipeline reports 21 ms). The
+`ground` correlations came out mutually contradictory across runs — `corr(time,
+n_points)` read −0.592 then +0.532, worst-15 overlap 7/15 then 0/15 — which is
+itself the signature of a measurement too noisy to conclude from. I am not
+publishing a verdict off that.
+
+### What this does NOT invalidate, and why
+
+The `transform` and `cleanup` findings stand, because **both were A/B arms run
+back to back in one process on identical data.** A machine-wide slowdown scales
+both arms together, so the *ratios* — 25× smaller tail, 21× less allocation, 3.9×
+faster — survive even though the absolutes would shift. That is the difference
+between a controlled comparison and a headline number, and it is why §6 and §10
+were built as A/Bs rather than as single measurements.
+
+Allocation counts are unaffected entirely: `tracemalloc` counts bytes, not time.
+
+### What a valid `ground` measurement needs
+
+1. A machine **not** 8 GB over-committed, checked before and after rather than
+   assumed.
+2. CPU clock recorded alongside the timings — `Win32_Processor.CurrentClockSpeed`
+   against `MaxClockSpeed`, because a 37% downclock is invisible in a timing table.
+3. The A/B discipline of §6 even for a C++ stage: there is nothing to preallocate
+   inside Patchwork++, but *fresh vs warm estimator* and *point count* can still be
+   contrasted within one process.
+
+### And it strengthens two existing items
+
+- **D8 (one agreed reference host).** This host's absolute timings moved **4.4×
+  within a single session**, unprompted. Any latency figure from it needs its
+  machine state attached, not just its hostname.
+- **R-b §3's warning** that two identical runs disagreed on the median by 17% was
+  an understatement. The real spread over a session is far larger.
+
 ## 9. Reproduce
 
 ```sh
