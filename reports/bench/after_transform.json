@@ -1,0 +1,426 @@
+{
+  "label": "after_transform",
+  "git": "12613df",
+  "branch": "",
+  "dirty_src": false,
+  "seq": "08",
+  "frames": 200,
+  "reps": [
+    {
+      "rows": {
+        "load": {
+          "p50": 1.22,
+          "p99": 1.7,
+          "max": 1.8
+        },
+        "transform": {
+          "p50": 0.93,
+          "p99": 1.45,
+          "max": 1.82
+        },
+        "range_image": {
+          "p50": 23.59,
+          "p99": 26.32,
+          "max": 26.58
+        },
+        "semantics": {
+          "p50": 0.51,
+          "p99": 0.94,
+          "max": 0.98
+        },
+        "motion": {
+          "p50": 0.08,
+          "p99": 0.2,
+          "max": 0.21
+        },
+        "ground": {
+          "p50": 19.89,
+          "p99": 22.62,
+          "max": 26.82
+        },
+        "reflectivity": {
+          "p50": 3.93,
+          "p99": 5.09,
+          "max": 5.31
+        },
+        "bin": {
+          "p50": 7.08,
+          "p99": 7.99,
+          "max": 8.04
+        },
+        "scatter": {
+          "p50": 6.9,
+          "p99": 8.8,
+          "max": 8.81
+        },
+        "fuse": {
+          "p50": 3.83,
+          "p99": 5.41,
+          "max": 5.53
+        },
+        "cleanup": {
+          "p50": 25.93,
+          "p99": 38.0,
+          "max": 42.91
+        },
+        "shift": {
+          "p50": 1.48,
+          "p99": 4.57,
+          "max": 4.64
+        },
+        "FRAME": {
+          "p50": 97.56,
+          "p99": 111.99,
+          "max": 112.83
+        }
+      },
+      "seconds": 21.7,
+      "state_before": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 8,
+        "phys_gb": 15.73,
+        "free_gb": 5.81,
+        "commit_gb": 12.63,
+        "uptime_min": 42,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "state_after": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 57,
+        "phys_gb": 15.73,
+        "free_gb": 5.78,
+        "commit_gb": 12.62,
+        "uptime_min": 42,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "trusted": true
+    },
+    {
+      "rows": {
+        "load": {
+          "p50": 1.2,
+          "p99": 1.93,
+          "max": 2.39
+        },
+        "transform": {
+          "p50": 0.91,
+          "p99": 1.42,
+          "max": 1.6
+        },
+        "range_image": {
+          "p50": 23.6,
+          "p99": 28.02,
+          "max": 30.74
+        },
+        "semantics": {
+          "p50": 0.5,
+          "p99": 0.93,
+          "max": 0.96
+        },
+        "motion": {
+          "p50": 0.08,
+          "p99": 0.22,
+          "max": 0.24
+        },
+        "ground": {
+          "p50": 19.68,
+          "p99": 24.51,
+          "max": 31.78
+        },
+        "reflectivity": {
+          "p50": 4.14,
+          "p99": 5.46,
+          "max": 6.46
+        },
+        "bin": {
+          "p50": 6.97,
+          "p99": 8.43,
+          "max": 11.26
+        },
+        "scatter": {
+          "p50": 6.98,
+          "p99": 8.97,
+          "max": 12.99
+        },
+        "fuse": {
+          "p50": 3.76,
+          "p99": 5.91,
+          "max": 6.35
+        },
+        "cleanup": {
+          "p50": 26.33,
+          "p99": 38.76,
+          "max": 38.95
+        },
+        "shift": {
+          "p50": 1.48,
+          "p99": 4.77,
+          "max": 4.82
+        },
+        "FRAME": {
+          "p50": 98.44,
+          "p99": 113.09,
+          "max": 121.44
+        }
+      },
+      "seconds": 21.8,
+      "state_before": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 18,
+        "phys_gb": 15.73,
+        "free_gb": 5.8,
+        "commit_gb": 12.66,
+        "uptime_min": 42,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "state_after": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 3,
+        "phys_gb": 15.73,
+        "free_gb": 5.8,
+        "commit_gb": 12.65,
+        "uptime_min": 43,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "trusted": true
+    },
+    {
+      "rows": {
+        "load": {
+          "p50": 1.22,
+          "p99": 2.12,
+          "max": 2.64
+        },
+        "transform": {
+          "p50": 0.89,
+          "p99": 1.85,
+          "max": 1.88
+        },
+        "range_image": {
+          "p50": 23.49,
+          "p99": 27.14,
+          "max": 30.26
+        },
+        "semantics": {
+          "p50": 0.53,
+          "p99": 1.04,
+          "max": 1.07
+        },
+        "motion": {
+          "p50": 0.08,
+          "p99": 0.16,
+          "max": 0.19
+        },
+        "ground": {
+          "p50": 19.7,
+          "p99": 27.37,
+          "max": 30.23
+        },
+        "reflectivity": {
+          "p50": 3.84,
+          "p99": 5.51,
+          "max": 5.97
+        },
+        "bin": {
+          "p50": 6.98,
+          "p99": 8.64,
+          "max": 8.84
+        },
+        "scatter": {
+          "p50": 6.87,
+          "p99": 9.1,
+          "max": 14.58
+        },
+        "fuse": {
+          "p50": 3.84,
+          "p99": 5.81,
+          "max": 5.82
+        },
+        "cleanup": {
+          "p50": 25.81,
+          "p99": 35.16,
+          "max": 36.43
+        },
+        "shift": {
+          "p50": 1.52,
+          "p99": 4.83,
+          "max": 5.21
+        },
+        "FRAME": {
+          "p50": 96.56,
+          "p99": 112.24,
+          "max": 112.28
+        }
+      },
+      "seconds": 20.4,
+      "state_before": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 2,
+        "phys_gb": 15.73,
+        "free_gb": 5.8,
+        "commit_gb": 12.64,
+        "uptime_min": 43,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "state_after": {
+        "python": "3.13.9",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13620H",
+        "clock_mhz": 2400,
+        "max_clock_mhz": 2400,
+        "load_pct": 4,
+        "phys_gb": 15.73,
+        "free_gb": 5.73,
+        "commit_gb": 12.72,
+        "uptime_min": 43,
+        "trusted": true,
+        "untrusted_because": []
+      },
+      "trusted": true
+    }
+  ],
+  "summary_trusted_median": {
+    "FRAME": {
+      "p50": 97.56,
+      "p99": 112.24,
+      "max": 112.83,
+      "p99_range": [
+        111.99,
+        113.09
+      ]
+    },
+    "bin": {
+      "p50": 6.98,
+      "p99": 8.43,
+      "max": 8.84,
+      "p99_range": [
+        7.99,
+        8.64
+      ]
+    },
+    "cleanup": {
+      "p50": 25.93,
+      "p99": 38.0,
+      "max": 38.95,
+      "p99_range": [
+        35.16,
+        38.76
+      ]
+    },
+    "fuse": {
+      "p50": 3.83,
+      "p99": 5.81,
+      "max": 5.82,
+      "p99_range": [
+        5.41,
+        5.91
+      ]
+    },
+    "ground": {
+      "p50": 19.7,
+      "p99": 24.51,
+      "max": 30.23,
+      "p99_range": [
+        22.62,
+        27.37
+      ]
+    },
+    "load": {
+      "p50": 1.22,
+      "p99": 1.93,
+      "max": 2.39,
+      "p99_range": [
+        1.7,
+        2.12
+      ]
+    },
+    "motion": {
+      "p50": 0.08,
+      "p99": 0.2,
+      "max": 0.21,
+      "p99_range": [
+        0.16,
+        0.22
+      ]
+    },
+    "range_image": {
+      "p50": 23.59,
+      "p99": 27.14,
+      "max": 30.26,
+      "p99_range": [
+        26.32,
+        28.02
+      ]
+    },
+    "reflectivity": {
+      "p50": 3.93,
+      "p99": 5.46,
+      "max": 5.97,
+      "p99_range": [
+        5.09,
+        5.51
+      ]
+    },
+    "scatter": {
+      "p50": 6.9,
+      "p99": 8.97,
+      "max": 12.99,
+      "p99_range": [
+        8.8,
+        9.1
+      ]
+    },
+    "semantics": {
+      "p50": 0.51,
+      "p99": 0.94,
+      "max": 0.98,
+      "p99_range": [
+        0.93,
+        1.04
+      ]
+    },
+    "shift": {
+      "p50": 1.48,
+      "p99": 4.77,
+      "max": 4.82,
+      "p99_range": [
+        4.57,
+        4.83
+      ]
+    },
+    "transform": {
+      "p50": 0.91,
+      "p99": 1.45,
+      "max": 1.82,
+      "p99_range": [
+        1.42,
+        1.85
+      ]
+    }
+  }
+}
