@@ -35,7 +35,7 @@ This is a running log, updated as each step closes.
 | 3 fine-tune | **SKIPPED: not needed for the goal** (see below) |
 | 4 eval pretrained checkpoint | **DONE: 90.3% point accuracy / 65.2% mIoU / 61.1% drivable, on the independently sourced checkpoint** |
 | 5 end-to-end speedup | **timed (5.82x wall, all runs trusted) but its correctness check FAILED: `--fast-scatter` runs disagree per class, run to run. STOPPED.** Cause not established |
-| 6 plan-regret delta | oracle control PASSED at 40 and 200 frames; **FRNet arm NOT RUN (stopped at Step 5)** |
+| 6 plan-regret delta | **DONE (loop path, no `--fast-scatter`): delta +0.997 longitudinal / +0.449 lateral** |
 
 ## Step 1: `--fast-scatter` wiring (read directly, not assumed)
 
@@ -383,3 +383,65 @@ rj_fastA   vs rj_fast1a   3,172 points differ;  rj_fastB vs rj_fast1a 2,789
   caveat until it is tested.
 - **Headline metrics stay insensitive:** 92.68% ± 0.005 pp across all five passes on this slice, and
   90.3% / 65.2% on 200 frames in every earlier run.
+
+## Step 6: the plan-regret delta, ground-truth labels vs FRNet labels (the deliverable)
+
+> **[!] Framing, restated:** the FRNet labels come from the **independently sourced public checkpoint**
+> (https://drive.google.com/drive/folders/173ZIzO7HOSE2JQ7lz_Ikk4O85Mau68el, file id
+> `1Ez-fpwu2WFCBw8usjwxUz6XQruw-cGU4`, downloaded 2026-09-14T07:27:54Z, SHA-256
+> `09adea9005215641aea915cc3aa2bebf74582ce240cca91dedd07940ad94285e`), **not** the 4 Sep file.
+> This is offline evaluation: the mapping pipeline still takes ground-truth labels, and nothing in
+> it was touched.
+
+Run: `scripts/plan_regret_frnet_delta.py --seq 08 --frames 200 --motion gt`, **without
+`--fast-scatter`**. That is Option 2, chosen because Step 5 found `--fast-scatter` not reproducible at
+default threads (R-j). The gate before the run passed (2400/2400 MHz, commit 12.5/15.73 GB), state
+after was OK (12.12/15.73 GB), and the checkpoint SHA-256 was re-verified first. Evidence:
+`reports/bench/plan_regret_frnet_delta_loop.json`.
+
+```
+sequence 08, frames 0-199, schedule 5/10/20/40, motion=gt, second arm = FRNet
+reference map (ground truth): ReferenceMap(3620x6066 @ 5 cm, 2,657,064 observed cells)   [7s]
+M_gt built    [36s]  digest 2f0f5636f3033c9c
+M_frnet built  [3942s]  digest 3b783d42de8d9f23
+per-point accuracy of the second arm's labels vs ground truth: 90.3% over 22,741,893 labelled points
+FRNet inference: 3903s total, 19.52s/frame (CPU)
+common support: 100.0% of the planning window
+
+  family            R_gt  R_second    delta  found gt/2nd  blocked gt/2nd
+  longitudinal     1.160     2.157   +0.997         64/64             0/0
+  lateral          1.142     1.591   +0.449         64/64             0/0
+```
+
+### The result
+
+| family | R, ground-truth labels | R, FRNet labels | delta | relative |
+|---|---|---|---|---|
+| longitudinal | 1.160 (sd 0.94) | 2.157 (sd 1.28) | **+0.997** | +86% |
+| lateral | 1.142 (sd 0.89) | 1.591 (sd 1.07) | **+0.449** | +39% |
+
+**Swapping ground-truth labels for this FRNet checkpoint's predictions (90.3% point accuracy)
+increases plan regret on real seq 08:** by about +0.997 on longitudinal queries and +0.449 on
+lateral ones. Both query families found paths in all 64 queries in both arms, with none blocked, on
+100% common support.
+
+### Why the baseline is trusted
+
+- **The ground-truth arm is bit-identical to the one validated by the oracle control:** digest
+  `2f0f5636f3033c9c` in both. The oracle control put ground truth through the FRNet arm's own code
+  path and got delta 0.000. So the delta comes from the labels and not from the plumbing, and the
+  motion ids and ground masks are held equal by construction.
+- **The FRNet labels score 90.3% point accuracy on the same 200 frames,** matching Step 4.
+
+### How strong, and the limits
+
+- **The uncertainty is rough.** The script records per-query standard deviations, not paired
+  per-query regrets. An unpaired standard error of each mean (SD/sqrt(64)) gives delta/SE of about
+  5.0 (longitudinal) and 2.6 (lateral). The queries share one map and are not fully
+  independent, and a paired analysis would usually be tighter. So these are indicative, not a formal
+  test.
+- **One FRNet-arm run, one schedule (`5/10/20/40`), one 200-frame slice, motion held at ground truth.**
+- **[!] R-j caveat:** this run used the loop path at the default 10 threads. That path's per-point
+  reproducibility at 10 threads is untested; so far it rests only on metric-level agreement. How much
+  the delta would move between runs is not measured.
+- **Cost:** FRNet inference on CPU, loop path, 19.52 s per frame (3,903 s for 200 frames).

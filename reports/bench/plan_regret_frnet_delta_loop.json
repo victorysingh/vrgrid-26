@@ -1,0 +1,46 @@
+{
+  "sequence": "08",
+  "frames": 200,
+  "schedule": "5/10/20/40",
+  "motion": "gt",
+  "oracle": false,
+  "fast_scatter": false,
+  "checkpoint": "checkpoints/frnet-semantickitti_seg.pth",
+  "label_point_accuracy": 0.9030912686116322,
+  "maps_bit_identical": false,
+  "common_support": 1.0,
+  "families": {
+    "longitudinal": {
+      "R_gt": 1.160394400562886,
+      "R_second": 2.1569841807272656,
+      "delta": 0.9965897801643797,
+      "sd_gt": 0.9436289188943303,
+      "sd_second": 1.2811604789291848,
+      "found": [
+        64,
+        64
+      ],
+      "blocked": [
+        0,
+        0
+      ],
+      "queries": 64
+    },
+    "lateral": {
+      "R_gt": 1.1423859120657516,
+      "R_second": 1.5913270534256525,
+      "delta": 0.44894114135990093,
+      "sd_gt": 0.8861970566180731,
+      "sd_second": 1.0681817667136664,
+      "found": [
+        64,
+        64
+      ],
+      "blocked": [
+        0,
+        0
+      ],
+      "queries": 64
+    }
+  }
+}
