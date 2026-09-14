@@ -34,8 +34,8 @@ This is a running log, updated as each step closes.
 | 2 shim verify | **PASSED** |
 | 3 fine-tune | **SKIPPED: not needed for the goal** (see below) |
 | 4 eval pretrained checkpoint | **DONE: 90.3% point accuracy / 65.2% mIoU / 61.1% drivable, on the independently sourced checkpoint** |
-| 5 end-to-end speedup | blocked on 4 |
-| 6 plan-regret delta | **script built; oracle control PASSED at 40 and 200 frames**; FRNet arm blocked on 4 |
+| 5 end-to-end speedup | **timed (5.82x wall, all runs trusted) but its correctness check FAILED: `--fast-scatter` runs disagree per class, run to run. STOPPED.** Cause not established |
+| 6 plan-regret delta | oracle control PASSED at 40 and 200 frames; **FRNet arm NOT RUN (stopped at Step 5)** |
 
 ## Step 1: `--fast-scatter` wiring (read directly, not assumed)
 
@@ -247,3 +247,80 @@ sequence 08, 200 frames, 22,741,893 labelled points
   likely explanation is that the 4 Sep file *was* this same public release. It carries the same
   name, `configs/frnet.yaml` cites the same 73.3%-mIoU release, and the metrics match to every
   printed digit. That remains an inference, not a verification.
+
+## Step 5: end-to-end timing, and the correctness check that failed
+
+**Stopped here, and Step 6 was not run.** The timing itself is trustworthy. The check that is
+supposed to make it a like-for-like speedup failed, and the cause is not established.
+
+Harness: `reports/harnesses/frnet_eval_timing.py`. It runs `frnet_eval.py` end to end in fresh
+processes, alternating the arms (fast, loop, loop, fast), records machine state before and after
+every run, and re-checks the checkpoint SHA-256. Evidence: `reports/bench/frnet_eval_timing.json`.
+
+| run | arm | wall | state before / after | acc | mIoU |
+|---|---|---|---|---|---|
+| 1 | fast | 670.2 s | OK / OK | 90.3 | 65.2 |
+| 2 | loop | 3953.8 s | OK / OK | 90.3 | 65.2 |
+| 3 | loop | 3855.6 s | OK / OK | 90.3 | 65.2 |
+| 4 | fast | 671.3 s | OK / OK | 90.3 | 65.2 |
+
+All four runs were trusted: 2400/2400 MHz throughout, commit 11.8–12.1 of 15.73 GB. **Median fast
+670.7 s, median loop 3904.7 s, so the end-to-end wall-time ratio is 5.82×.** That ratio is measured,
+not estimated. It is far below the 64–156× per-call figure, because the rest of the forward pass is a
+large fixed cost on CPU.
+
+### [!] The failed check: per-class IoU is not reproducible on the fast path
+
+On CPU the shim was believed bit-identical, so every run in both arms had to print identical metrics.
+They did not:
+
+| class | Step 4 (fast) | run 1 fast | run 2 loop | run 3 loop | run 4 fast |
+|---|---|---|---|---|---|
+| bicycle | 48.0 | **48.2** | 48.0 | 48.0 | 48.0 |
+| parking | 45.2 | **45.3** | 45.2 | 45.2 | **45.3** |
+| person | 70.0 | **70.1** | 70.0 | 70.0 | 70.0 |
+| traffic-sign | 41.3 | 41.3 | 41.3 | 41.3 | **41.4** |
+| trunk | 79.4 | 79.4 | 79.4 | 79.4 | **79.3** |
+| the other 10 classes | identical in every run | | | | |
+
+- **The loop arm is reproducible:** runs 2 and 3 agree exactly.
+- **The fast arm is not reproducible run to run.** Runs 1 and 4 differ from each other, and Step 4's
+  fast run differs from both while matching the loop arm exactly.
+- **The headline figures are unaffected at printed precision.** Point accuracy 90.3%, mIoU 65.2% and
+  drivable 61.1% are the same in all five runs. The instability is 0.1–0.2 pp in five classes, mostly
+  small ones (bicycle has 6,899 ground-truth points, person 33,383).
+
+### The obvious cause was tested and is NOT it
+
+Hypothesis: PyTorch's CPU `scatter_reduce` goes multithreaded at production shapes, so its summation
+order, and with it the float rounding, varies between runs.
+`reports/harnesses/shim_determinism_probe.py` calls the shim's reductions alone at the benchmark
+shape (124,000 × 256 into 25,000 slots), repeated 6 times, at 10 threads and at 1 thread:
+
+```
+scatter_max   threads=10 repeats bit-identical: True  (0 differing)  == loop in 6/6
+scatter_max   threads=1  repeats bit-identical: True  (0 differing)  == loop in 6/6
+scatter_mean  threads=10 repeats bit-identical: True  (0 differing)  == loop in 6/6   max |fast-loop| 0.000e+00
+scatter_mean  threads=1  repeats bit-identical: True  (0 differing)  == loop in 6/6   max |fast-loop| 0.000e+00
+```
+
+(For `scatter_max` the probe prints `max |fast-loop|` as `nan`, because empty slots are `-inf` in both
+and `-inf − -inf` is `nan`. `torch.equal` is the real check, and it passed 6/6.)
+
+**On random inputs at the real shape, the reductions are deterministic and exactly equal to the
+loop.** So the hypothesis is refuted as stated.
+
+- **Known:** in the full evaluation, three `--fast-scatter` runs gave three different per-class
+  results, while two loop runs gave identical ones.
+- **Not known:** where the divergence comes from. Untested candidates include real (not random) index
+  and value patterns reaching a different kernel path, run-to-run variation elsewhere in the forward
+  pass, and a chance agreement between the two loop runs. None is established, and none was chased
+  further, as instructed.
+
+**[!] Correction to commit `8f74f30`.** Its message says the shim's "bit-identical on CPU" does not hold
+at production shapes. The probe above contradicts that: the reductions alone are exact at production
+shapes on random inputs. The observed run-to-run disagreement stands, but its attribution to the shim
+is withdrawn.
+
+**What must not be said from this:** that `--fast-scatter` is a verified like-for-like 5.82× on CPU.
+Only the wall-time ratio is established.
