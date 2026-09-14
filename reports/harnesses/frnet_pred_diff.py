@@ -38,6 +38,10 @@ def run(args):
     from vrgrid.perception import loader, semantics
     from vrgrid.perception.frnet import FRNet
 
+    dev = torch.device(args.device)
+    if dev.type == "cuda" and not torch.cuda.is_available():
+        sys.exit("--device cuda requested but CUDA is not available")
+
     ckpt = Path(args.checkpoint)
     h = hashlib.sha256(ckpt.read_bytes()).hexdigest()
     if h != EXPECTED_SHA256:
@@ -46,18 +50,24 @@ def run(args):
     if args.fast_scatter:
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
         from frnet_fast_scatter import enable
-        enable(verify=True)
+        enable(verify=True, device=str(dev))
 
     model = FRNet(num_classes=20, ignore_index=19, output_shape=(64, 512),
                   fov_up=semantics.FRNET_TRAIN_FOV_UP_DEG,
                   fov_down=semantics.FRNET_TRAIN_FOV_DOWN_DEG)
     blob = torch.load(ckpt, map_location="cpu", weights_only=False)
     model.load_state_dict(blob.get("state_dict", blob), strict=False)
-    model.to("cpu").eval()
+    model.to(dev).eval()
 
     meta = {"fast_scatter": args.fast_scatter, "threads_requested": args.threads,
             "num_threads": torch.get_num_threads(),
             "num_interop_threads": torch.get_num_interop_threads(),
+            "device": str(dev),
+            "gpu": torch.cuda.get_device_name(0) if dev.type == "cuda" else None,
+            "cuda": torch.version.cuda,
+            "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+            "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+            "deterministic_algorithms": bool(torch.are_deterministic_algorithms_enabled()),
             "torch": torch.__version__, "seq": args.seq, "frames": args.frames}
     print("  " + json.dumps(meta))
 
@@ -68,7 +78,7 @@ def run(args):
         gts[f"{i:06d}"] = semantics.semantic_labels(
             loader.load_labels(root / "labels" / f"{i:06d}.label")).astype(np.int8)
         with torch.no_grad():
-            p = model.predict([torch.from_numpy(pts).float()])[0].cpu().numpy()
+            p = model.predict([torch.from_numpy(pts).float().to(dev)])[0].cpu().numpy()
         preds[f"{i:06d}"] = p.astype(np.uint8)
     np.savez_compressed(args.out, meta=json.dumps(meta),
                         **{f"pred_{k}": v for k, v in preds.items()},
@@ -90,7 +100,8 @@ def diff(args):
     for name, meta, p, g in passes:
         ok = sum(int(((p[k] == g[k]) & (g[k] >= 0)).sum()) for k in frames)
         tot = sum(int((g[k] >= 0).sum()) for k in frames)
-        print(f"  {name:<14} fast={meta['fast_scatter']!s:<5} threads={meta['num_threads']:<2} "
+        print(f"  {name:<14} device={meta.get('device', 'cpu'):<6} "
+              f"fast={meta['fast_scatter']!s:<5} threads={meta['num_threads']:<2} "
               f"interop={meta['num_interop_threads']:<2} acc {ok / tot:.4%}")
     n_points = sum(len(passes[0][2][k]) for k in frames)
     print(f"\n  pairwise differing points over {len(frames)} frames ({n_points:,} points):")
@@ -120,6 +131,8 @@ def main():
     r.add_argument("--checkpoint", default="checkpoints/frnet-semantickitti_seg.pth")
     r.add_argument("--fast-scatter", action="store_true")
     r.add_argument("--threads", type=int, default=None)
+    r.add_argument("--device", default="cpu",
+                   help="cpu (default, as R-j was measured) or cuda -- the GPU reproducibility test")
     r.add_argument("--out", required=True)
     d = sub.add_parser("diff")
     d.add_argument("files", nargs="+")

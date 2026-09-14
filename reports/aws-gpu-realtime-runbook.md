@@ -100,6 +100,42 @@ for r in 1 2 3; do
 done
 ```
 
+## 5b. GPU reproducibility, tested on its own terms (JP, 2026-09-14)
+
+R-j showed that on **CPU**, with one thread, `--fast-scatter` gives the same predictions on every run
+and matches the loop exactly. **That finding does not carry over to the GPU.** On CUDA the question is
+different: atomic-add ordering inside the kernels, and cuDNN algorithm choice, not Python thread pools.
+Measure it here, before quoting any GPU number as reproducible.
+
+```sh
+# (e) the shim alone, twice, in separate processes -- compare the printed sha256[0] values
+state before-e1; python reports/harnesses/shim_determinism_probe.py --device cuda | tee reports/bench/shim_probe_t4_run1.txt; state after-e1
+state before-e2; python reports/harnesses/shim_determinism_probe.py --device cuda | tee reports/bench/shim_probe_t4_run2.txt; state after-e2
+# and the shim's own verify, twice
+python scripts/frnet_fast_scatter.py | tee reports/bench/shim_verify_t4_run1.txt
+python scripts/frnet_fast_scatter.py | tee reports/bench/shim_verify_t4_run2.txt
+
+# (f) full-model predictions, point for point: --fast-scatter on CUDA, twice, then diff
+H=reports/harnesses/frnet_pred_diff.py
+state before-f1; python $H run --device cuda --fast-scatter --frames 20 --out gpu_fastA.npz; state after-f1
+state before-f2; python $H run --device cuda --fast-scatter --frames 20 --out gpu_fastB.npz; state after-f2
+python $H diff gpu_fastA.npz gpu_fastB.npz --json reports/bench/gpu_fast_scatter_pred_diff_t4.json
+```
+
+**How to read it, and what not to do:**
+
+- **`0 points differ` between `gpu_fastA` and `gpu_fastB`:** repeated GPU runs agree point for point
+  at the default settings recorded in the metadata (device, GPU, CUDA version, cuDNN flags). Say
+  exactly that, for that configuration only.
+- **Any points differ:** the GPU path is not reproducible at default settings. **Report the count as
+  the finding** (points, frames affected, maximum in one frame), and say that the end-to-end figure
+  from (c) inherits it. Do **not** quietly switch on `torch.use_deterministic_algorithms(True)` or cuDNN
+  determinism and report only the clean run. If a deterministic re-run is wanted, run it as a
+  **separate, labelled** pair and report both.
+- **Cross-check against the CPU:** the per-point diff of `gpu_fastA` against a CPU single-thread pass
+  on the same 20 frames shows how far GPU labels sit from the CPU-reproducible ones. It is expected to
+  be non-zero (the CUDA `scatter_mean` differs by up to 2 ulp).
+
 ## 6. What to report
 
 - **Pooled p99 over all frames of the three (c) runs.** That is the project's gate criterion; the
@@ -110,6 +146,7 @@ done
 - **(c) against (d), both on the instance:** the cost the network adds to the frame.
 - **FPS** = 1000 / p50 ms and 1000 / p99 ms, stated with the instance type.
 - **Point accuracy printed by (a)**, as a sanity check that the GPU path still labels correctly.
+- **The GPU reproducibility result from 5b**, stated next to every GPU figure: whether two runs agreed point for point, under which settings.
 - **Motion stays ground truth** (`moving-*` labels) in the DL mode. Say so next to the figure.
 - Commit the JSON and text outputs with the instance type, driver, CUDA and torch versions, and the
   recorded state blocks.
