@@ -26,3 +26,22 @@
 The authors' README cites 73.3% mIoU on the SemanticKITTI **test** set. Our `frnet_eval.py` scores
 the first 200 frames of **validation** seq 08 over the classes present there. The two numbers are
 different measurements, and neither is expected to equal the other.
+
+## Corroboration: an independent second download matches (2026-09-14)
+
+JP downloaded the same file separately, through a browser, to
+`C:\Users\JAIPREET SINGH\Downloads\frnet-semantickitti_seg.pth`. The file was created at 17:40:29
+local time (+05:30), about 4.5 h after the curl download above. Checked read-only, nothing copied:
+
+| check | result |
+|---|---|
+| SHA-256 | `09adea9005215641aea915cc3aa2bebf74582ce240cca91dedd07940ad94285e`, **identical** |
+| bytes | 40,327,676, identical |
+| `cmp` against `checkpoints/frnet-semantickitti_seg.pth` | **identical byte for byte** |
+| download origin (Windows `Zone.Identifier`) | `drive.usercontent.google.com`, the same file id `1Ez-fpwu2WFCBw8usjwxUz6XQruw-cGU4` (session token not recorded) |
+
+**What this adds:** two independent downloads of the authors' public file, by different clients hours
+apart, gave the same SHA-256. So the public file was stable across those hours, and the hash is a
+sound identifier for it. **What it does not add:** any link to the original 4 Sep copy. This second
+file was also downloaded today from the same public source, so the 4 Sep copy remains unrecoverable
+and unverifiable.
