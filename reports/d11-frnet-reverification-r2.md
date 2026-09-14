@@ -33,7 +33,7 @@ This is a running log, updated as each step closes.
 | 1 `--fast-scatter` wiring | **already wired in both scripts, no change** |
 | 2 shim verify | **PASSED** |
 | 3 fine-tune | **SKIPPED: not needed for the goal** (see below) |
-| 4 eval pretrained checkpoint | A closed (file gone); **B downloaded, SHA-256 recorded**; eval next |
+| 4 eval pretrained checkpoint | **DONE: 90.3% point accuracy / 65.2% mIoU / 61.1% drivable, on the independently sourced checkpoint** |
 | 5 end-to-end speedup | blocked on 4 |
 | 6 plan-regret delta | **script built; oracle control PASSED at 40 and 200 frames**; FRNet arm blocked on 4 |
 
@@ -204,3 +204,46 @@ common support: 100.0% of the planning window
   count.
 - **The map-building cost per arm is 35 s for 200 frames** (M\* 9 s). FRNet inference will be added
   to the second arm, and its CPU cost is measured in Steps 4–5, not estimated here.
+
+## Step 4: evaluation of the downloaded checkpoint (`--fast-scatter`, CPU)
+
+**Checkpoint:** the authors' public release, SHA-256
+`09adea9005215641aea915cc3aa2bebf74582ce240cca91dedd07940ad94285e`. **Independently sourced, NOT a
+reproduction of the 4 Sep file.** Before use, the downloaded bytes matched Google's served
+`crc32c=Qaiqow==`, so there was no transport corruption, and the SHA-256 was re-checked unchanged.
+
+- State before: clock 2400/2400 MHz, commit 12.1/15.73 GB, free 6.89 GB. **OK.**
+- State after: clock 2400/2400 MHz, commit 11.83/15.73 GB, free 7.65 GB. **OK.**
+- `torch 2.13.0+cpu`, 10 threads. The shim self-verified at start-up: max and mean both 0.000e+00,
+  forward and backward.
+- Wall time **666 s** for 200 frames, end to end: start-up, verify, model load, data, inference,
+  scoring. About 3.3 s per frame. This single run is not the Step 5 timing.
+
+```
+frnet-semantickitti_seg.pth on cpu: 0 missing, 8 unexpected tensors (auxiliary heads are training-only)
+sequence 08, 200 frames, 22,741,893 labelled points
+  reductions                torch.scatter_reduce (--fast-scatter)
+  point accuracy             90.3%
+  mIoU over 15 present classes   65.2%   (paper: 73.3% over all 4,071 frames)
+
+  car 97.9  road 97.4  bicyclist 91.2  sidewalk 89.2  building 89.1  trunk 79.4  terrain 73.8
+  vegetation 70.8  person 70.0  pole 55.1  bicycle 48.0  parking 45.2  traffic-sign 41.3
+  fence 29.4  other-ground 0.0
+  no ground truth in this slice, excluded: motorcycle, truck, other-vehicle, motorcyclist
+  §7.1 drivable set only: mIoU 61.1% over 5 classes
+```
+
+### How this compares with the recorded 90.3% / 65.2%, stated plainly
+
+- **The numbers match the recorded figures exactly at the printed precision:** point accuracy
+  90.3%, mIoU 65.2% over the same 15 present classes, drivable-set 61.1%. The same 22,741,893
+  labelled points were scored, and `other-ground` is again present at IoU 0.0% over 150 points.
+- **The per-class IoUs agree too, at the level the record allows.** The 4 Sep entry records that
+  the 15 per-class IoUs sum to 977.7. Today's printed, rounded values sum to 977.8, which is
+  within rounding (15 values × ±0.05).
+- **What this does and does not establish.** It shows that our port, with this public checkpoint,
+  produces the reported figures on the reported slice. It does **not** prove that this file is
+  byte-identical to the 4 Sep copy: that copy had no recorded hash and no longer exists. The most
+  likely explanation is that the 4 Sep file *was* this same public release. It carries the same
+  name, `configs/frnet.yaml` cites the same 73.3%-mIoU release, and the metrics match to every
+  printed digit. That remains an inference, not a verification.
