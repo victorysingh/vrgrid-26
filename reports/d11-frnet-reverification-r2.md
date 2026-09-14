@@ -324,3 +324,9 @@ is withdrawn.
 
 **What must not be said from this:** that `--fast-scatter` is a verified like-for-like 5.82× on CPU.
 Only the wall-time ratio is established.
+
+## R-j diagnostic, first launch: aborted on an untrusted machine (no result used)
+
+The 20-frame per-point prediction diff (`reports/harnesses/frnet_pred_diff.py`: fast ×2, fast with `torch.set_num_threads(1)` ×2, loop ×1), chained to Option 2, was launched at 16:08:55. Its first state line read **commit 17.29 GB against 15.73 GB physical, free 3.17 GB: UNTRUSTED (paging)**. By process group, chrome had 48 processes and 4.9 GB. It was stopped during the first pass (commit had reached 19.51 GB, of which 2.3 GB was the pass itself). **Nothing from it is used.**
+
+[!] **Process miss, corrected.** The launch gated only Option 2, not the diagnostic passes, against the standing rule that every run is gated. The relaunch gates before every pass and before Option 2, and stops the moment a gate fails. Option 2 had not started.
