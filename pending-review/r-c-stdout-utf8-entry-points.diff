@@ -1,0 +1,314 @@
+diff --git a/scripts/ablation_table.py b/scripts/ablation_table.py
+index a718420..58a4956 100755
+--- a/scripts/ablation_table.py
++++ b/scripts/ablation_table.py
+@@ -323,4 +323,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/baseline_demo.py b/scripts/baseline_demo.py
+index 47b1b6c..7c85f7d 100755
+--- a/scripts/baseline_demo.py
++++ b/scripts/baseline_demo.py
+@@ -126,4 +126,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/bench_pyramid.py b/scripts/bench_pyramid.py
+index 7bc1663..bca966a 100755
+--- a/scripts/bench_pyramid.py
++++ b/scripts/bench_pyramid.py
+@@ -101,4 +101,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/bench_scatter.py b/scripts/bench_scatter.py
+index 6776187..708a00b 100755
+--- a/scripts/bench_scatter.py
++++ b/scripts/bench_scatter.py
+@@ -74,4 +74,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/build_reference_map.py b/scripts/build_reference_map.py
+index 206acc4..c864a0a 100755
+--- a/scripts/build_reference_map.py
++++ b/scripts/build_reference_map.py
+@@ -123,4 +123,10 @@ def main():
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     raise SystemExit(main())
+diff --git a/scripts/data_status.py b/scripts/data_status.py
+index f6f720e..5e28c26 100755
+--- a/scripts/data_status.py
++++ b/scripts/data_status.py
+@@ -80,4 +80,10 @@ def main(argv):
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main(sys.argv))
+diff --git a/scripts/eval_synthetic.py b/scripts/eval_synthetic.py
+index ea6680a..6f554e1 100644
+--- a/scripts/eval_synthetic.py
++++ b/scripts/eval_synthetic.py
+@@ -385,4 +385,11 @@ def main():
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/feature_report.py b/scripts/feature_report.py
+index 65e8b32..ee15f2a 100755
+--- a/scripts/feature_report.py
++++ b/scripts/feature_report.py
+@@ -189,4 +189,10 @@ def main():
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main())
+diff --git a/scripts/frnet_eval.py b/scripts/frnet_eval.py
+index c96e802..0169714 100755
+--- a/scripts/frnet_eval.py
++++ b/scripts/frnet_eval.py
+@@ -149,4 +149,10 @@ def main():
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main())
+diff --git a/scripts/frnet_fast_scatter.py b/scripts/frnet_fast_scatter.py
+index 62bd30b..e75cd6f 100755
+--- a/scripts/frnet_fast_scatter.py
++++ b/scripts/frnet_fast_scatter.py
+@@ -247,6 +247,12 @@ def _benchmark(device: str | None = None) -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     verify_equivalence()
+     _benchmark()
+     sys.exit(0)
+diff --git a/scripts/frnet_finetune.py b/scripts/frnet_finetune.py
+index f2d645a..d98a8e4 100755
+--- a/scripts/frnet_finetune.py
++++ b/scripts/frnet_finetune.py
+@@ -335,4 +335,10 @@ def main() -> int:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main())
+diff --git a/scripts/gen_demo_rrds.py b/scripts/gen_demo_rrds.py
+index 1635261..f11fb56 100644
+--- a/scripts/gen_demo_rrds.py
++++ b/scripts/gen_demo_rrds.py
+@@ -127,6 +127,12 @@ shots = [
+ ]
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     # ⚑ Same data-root trap `scripts/demo.sh` resolves: the loader wants the
+     #   directory holding poses/ and sequences/, which in this clone is
+     #   data/dataset and NOT data. Unset, the first shot dies 60 frames deep in
+diff --git a/scripts/ghost_removal_figure.py b/scripts/ghost_removal_figure.py
+index 71d7fa1..e31c22e 100755
+--- a/scripts/ghost_removal_figure.py
++++ b/scripts/ghost_removal_figure.py
+@@ -318,4 +318,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/measure_visibility_cap.py b/scripts/measure_visibility_cap.py
+index da4d910..40f65e9 100755
+--- a/scripts/measure_visibility_cap.py
++++ b/scripts/measure_visibility_cap.py
+@@ -116,4 +116,10 @@ def main():
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main())
+diff --git a/scripts/memory_bound.py b/scripts/memory_bound.py
+index fa04741..3d32917 100755
+--- a/scripts/memory_bound.py
++++ b/scripts/memory_bound.py
+@@ -85,4 +85,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/memory_table.py b/scripts/memory_table.py
+index f688444..3292c83 100755
+--- a/scripts/memory_table.py
++++ b/scripts/memory_table.py
+@@ -56,4 +56,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/plan_query_survey.py b/scripts/plan_query_survey.py
+index 3dbc9ca..a07a729 100755
+--- a/scripts/plan_query_survey.py
++++ b/scripts/plan_query_survey.py
+@@ -452,4 +452,10 @@ def main() -> int:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     raise SystemExit(main())
+diff --git a/scripts/regret_plot.py b/scripts/regret_plot.py
+index 0e50e4d..8bcab29 100755
+--- a/scripts/regret_plot.py
++++ b/scripts/regret_plot.py
+@@ -333,4 +333,10 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     sys.exit(main())
+diff --git a/scripts/sampling_table.py b/scripts/sampling_table.py
+index 408ade0..6b93bd0 100755
+--- a/scripts/sampling_table.py
++++ b/scripts/sampling_table.py
+@@ -78,4 +78,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
+diff --git a/scripts/timing_table.py b/scripts/timing_table.py
+index ef787d9..0d8c781 100755
+--- a/scripts/timing_table.py
++++ b/scripts/timing_table.py
+@@ -629,4 +629,11 @@ def main() -> None:
+ 
+ 
+ if __name__ == "__main__":
++    # R-c: docstrings and tables here print non-cp1252 markers, which crash a
++    # cp1252 console (--help included). Reconfigured at the entry point, not at
++    # import, because tests import these modules under pytest's capture streams.
++    import sys
++    for _stream in (sys.stdout, sys.stderr):
++        if hasattr(_stream, "reconfigure"):
++            _stream.reconfigure(encoding="utf-8")
+     main()
