@@ -26,15 +26,17 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import machine_state  # noqa: E402
+import numpy as np  # noqa: E402
 
 ROW = re.compile(r"^(\w+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s")
 
 
-def one_rep(seq, frames):
+def one_rep(seq, frames, times_path):
     env = dict(os.environ, PYTHONUTF8="1")
     t0 = time.time()
     out = subprocess.run(
-        [sys.executable, "scripts/timing_table.py", "--seq", seq, "--frames", str(frames)],
+        [sys.executable, "scripts/timing_table.py", "--seq", seq, "--frames", str(frames),
+         "--frame-times", str(times_path)],
         capture_output=True, text=True, env=env, timeout=1800)
     rows = {}
     for ln in out.stdout.splitlines():
@@ -45,7 +47,8 @@ def one_rep(seq, frames):
     if "FRAME" not in rows:
         raise SystemExit("timing_table printed no FRAME row:\n" + out.stdout[-2000:]
                          + out.stderr[-2000:])
-    return rows, round(time.time() - t0, 1)
+    frame_ms = json.loads(pathlib.Path(times_path).read_text(encoding="utf-8"))
+    return rows, round(time.time() - t0, 1), frame_ms
 
 
 def main():
@@ -66,10 +69,13 @@ def main():
     print(f"[{args.label}] {branch}@{git}{' (DIRTY src/scripts)' if dirty else ''}, "
           f"seq {args.seq}, {args.frames} frames x {args.reps} fresh-process reps")
 
+    outdir = pathlib.Path(args.out)
+    outdir.mkdir(exist_ok=True)
     reps = []
     for r in range(args.reps):
         before = machine_state.snapshot()
-        rows, secs = one_rep(args.seq, args.frames)
+        rows, secs, frame_ms = one_rep(args.seq, args.frames,
+                                       outdir / f".{args.label}.rep{r+1}.frames.json")
         after = machine_state.snapshot()
         trusted = bool(before.get("trusted")) and bool(after.get("trusted"))
         f = rows["FRAME"]
@@ -78,7 +84,7 @@ def main():
         print(f"         before: {machine_state.line(before)}")
         print(f"         after:  {machine_state.line(after)}")
         reps.append({"rows": rows, "seconds": secs, "state_before": before,
-                     "state_after": after, "trusted": trusted})
+                     "state_after": after, "trusted": trusted, "frame_ms": frame_ms})
 
     good = [x for x in reps if x["trusted"]]
     print(f"\n  trusted reps: {len(good)} of {len(reps)}")
@@ -93,12 +99,21 @@ def main():
                                         max(v["p99"] for v in vals)]
         f = summary["FRAME"]
         print(f"  FRAME median of reps: p50 {f['p50']}  p99 {f['p99']}  "
-              f"(p99 across reps {f['p99_range'][0]}-{f['p99_range'][1]})  "
-              f"budget 100 ms -> p50 {'PASS' if f['p50'] < 100 else 'MISS'}, "
-              f"p99 {'PASS' if f['p99'] < 100 else 'MISS'}")
+              f"(p99 across reps {f['p99_range'][0]}-{f['p99_range'][1]})  -- per-run, NOT the gate")
+        # THE GATE (JP, 2026-09-14): p99 over every frame of every trusted run,
+        # ranked together. numpy's default linear percentile, as timing.py uses.
+        pooled = np.asarray([x for rep in good for x in rep["frame_ms"]], dtype=np.float64)
+        over = int((pooled > 100.0).sum())
+        summary["FRAME_pooled"] = {
+            "frames": int(pooled.size), "p50": round(float(np.median(pooled)), 2),
+            "p99": round(float(np.percentile(pooled, 99)), 2),
+            "max": round(float(pooled.max()), 2), "frames_over_100ms": over}
+        g = summary["FRAME_pooled"]
+        print(f"  FRAME POOLED over {g['frames']} frames: p50 {g['p50']}  p99 {g['p99']}  "
+              f"max {g['max']}  ({over} frames > 100 ms)  "
+              f"budget 100 ms -> p50 {'PASS' if g['p50'] < 100 else 'MISS'}, "
+              f"p99 {'PASS' if g['p99'] < 100 else 'MISS'}")
 
-    outdir = pathlib.Path(args.out)
-    outdir.mkdir(exist_ok=True)
     path = outdir / f"{args.label}.json"
     path.write_text(json.dumps({"label": args.label, "git": git, "branch": branch,
                                 "dirty_src": dirty, "seq": args.seq,

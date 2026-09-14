@@ -82,6 +82,8 @@ bench_scatter's exactly, and this is the reason.
 """
 
 import argparse
+import pathlib
+import json
 import platform
 import subprocess
 import time
@@ -545,6 +547,10 @@ def main() -> None:
     ap.add_argument("--clip-class-ids", action="store_true",
                     help="--seq only: clip semantic ids to 15 so fusion's 4-bit "
                          "candidate accepts them (math §10.2)")
+    ap.add_argument("--frame-times", default=None, metavar="PATH",
+                    help="with --seq: also write every frame's whole-frame time "
+                         "(ms, startup frame excluded) as JSON, so p99 can be "
+                         "pooled across runs instead of taken per run")
     ap.add_argument("--alloc", action="store_true",
                     help="also report transient bytes per frame per stage, for the "
                          "MAPPING BACK END only (separate pass; tracemalloc "
@@ -570,6 +576,13 @@ def main() -> None:
             "  Run --alloc WITHOUT --seq for the back-end figure, and do not "
             "quote it as a whole-frame number.")
 
+    # Same failure class as --alloc above, the other way round: --frame-times is
+    # written only on the --seq path, so without --seq it would be silently
+    # ignored and a pooled p99 would be computed from a file that never existed.
+    if args.frame_times and args.seq is None:
+        raise SystemExit("--frame-times requires --seq; the synthetic path does not "
+                         "record whole-frame samples")
+
     sched = load(args.schedule)
     if args.speed_mps is None:
         args.speed_mps = sched.anisotropy.v_ref_ms
@@ -583,6 +596,13 @@ def main() -> None:
         print(f"sequence {args.seq}, {frames} frames, schedule {args.schedule}, "
               f"{engine.handle.allocated_slots:,} slots\n")
         print_real_table(t)
+        if args.frame_times:
+            # The raw samples, not a percentile of them: a p99 gate judged over
+            # several runs has to rank every frame together, and per-run p99s
+            # cannot be pooled after the fact.
+            pathlib.Path(args.frame_times).write_text(
+                json.dumps([round(float(x), 4) for x in t._samples("total")]),
+                encoding="utf-8")
         return
 
     handle = allocate(sched, with_pyramid=not args.no_pyramid)
