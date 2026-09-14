@@ -10,6 +10,19 @@ AWS g4dn.xlarge, not this machine. Stop at the first genuine blocker.
 
 This is a running log, updated as each step closes.
 
+> **[!] FRAMING, UP FRONT, FOR EVERY NUMBER BELOW.** Steps 4–6 use an **independently sourced
+> checkpoint from the FRNet authors' public release**:
+> - URL: https://drive.google.com/drive/folders/173ZIzO7HOSE2JQ7lz_Ikk4O85Mau68el (file id
+>   `1Ez-fpwu2WFCBw8usjwxUz6XQruw-cGU4`), linked from https://github.com/Xiangxu-0103/FRNet
+> - Downloaded: 2026-09-14T07:27:54Z
+> - **SHA-256 `09adea9005215641aea915cc3aa2bebf74582ce240cca91dedd07940ad94285e`**
+>
+> It is **NOT a reproduction of the original 4 Sep file** behind 90.3% / 65.2%, which no longer
+> exists anywhere and never had a recorded hash. This SHA-256 is the only provenance record there
+> will ever be. **If its numbers differ from 90.3% / 65.2%, that is expected and is reported as
+> its own result, not chased as an error.** They may simply be two different, both legitimate
+> checkpoints. Full record: `checkpoints/frnet-semantickitti_seg.pth.PROVENANCE.md`.
+
 ---
 
 ## Status
@@ -20,7 +33,7 @@ This is a running log, updated as each step closes.
 | 1 `--fast-scatter` wiring | **already wired in both scripts, no change** |
 | 2 shim verify | **PASSED** |
 | 3 fine-tune | **SKIPPED: not needed for the goal** (see below) |
-| 4 eval pretrained checkpoint | **BLOCKED: checkpoint absent.** A (Shrestha) pending, then B |
+| 4 eval pretrained checkpoint | A closed (file gone); **B downloaded, SHA-256 recorded**; eval next |
 | 5 end-to-end speedup | blocked on 4 |
 | 6 plan-regret delta | **script built; oracle control PASSED at 40 and 200 frames**; FRNet arm blocked on 4 |
 
