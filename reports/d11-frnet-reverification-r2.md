@@ -330,3 +330,56 @@ Only the wall-time ratio is established.
 The 20-frame per-point prediction diff (`reports/harnesses/frnet_pred_diff.py`: fast ×2, fast with `torch.set_num_threads(1)` ×2, loop ×1), chained to Option 2, was launched at 16:08:55. Its first state line read **commit 17.29 GB against 15.73 GB physical, free 3.17 GB: UNTRUSTED (paging)**. By process group, chrome had 48 processes and 4.9 GB. It was stopped during the first pass (commit had reached 19.51 GB, of which 2.3 GB was the pass itself). **Nothing from it is used.**
 
 [!] **Process miss, corrected.** The launch gated only Option 2, not the diagnostic passes, against the standing rule that every run is gated. The relaunch gates before every pass and before Option 2, and stops the moment a gate fails. Option 2 had not started.
+
+## R-j diagnostic (relaunched on a clean machine): the thread pool is the mechanism, and one question remains open
+
+Relaunched at 16:15:42 after the apps were closed. **Every pass was gated first, and every gate
+passed:** 2400/2400 MHz, commit 12.04–12.46 of 15.73 GB. The harness is
+`reports/harnesses/frnet_pred_diff.py` (it transcribes `frnet_eval.py`'s inference and saves
+per-point predictions). Frames 0–19 of seq 08, 2,471,164 points, checkpoint SHA-256 re-checked in
+every pass. `--threads 1` calls `torch.set_num_threads(1)` as the first torch call in the process,
+so it covers the whole evaluation, not just the shim. The inter-op pool stayed at its default of 10.
+
+| pass | `--fast-scatter` | intra-op threads | wall | point accuracy (20 frames) |
+|---|---|---|---|---|
+| fastA | yes | 10 | 69 s | 92.6835% |
+| fast1a | yes | **1** | 129 s | 92.6882% |
+| fastB | yes | 10 | 69 s | 92.6886% |
+| fast1b | yes | **1** | 129 s | 92.6882% |
+| loop | no | 10 | 405 s | 92.6849% |
+
+Pairwise differing points:
+
+```
+rj_fastA   vs rj_fastB    1,895 points differ, in 20/20 frames   (max 175 in one frame)
+rj_fast1a  vs rj_fast1b       0 points differ, in  0/20 frames
+rj_fastA   vs rj_loop     1,572 points differ, in 20/20 frames
+rj_fastB   vs rj_loop     1,295 points differ, in 20/20 frames
+rj_fast1a  vs rj_loop     3,088 points differ, in 20/20 frames   (fast1b identical to fast1a)
+rj_fastA   vs rj_fast1a   3,172 points differ;  rj_fastB vs rj_fast1a 2,789
+```
+
+### What this establishes
+
+- **Single-threading eliminates the run-to-run variance.** Two default-thread fast passes disagree on
+  1,895 points, spread across every frame. Two single-thread fast passes agree on every point.
+- **The mechanism is PyTorch's intra-op thread pool, inside the full graph.** The shim's reductions
+  alone were already shown deterministic and loop-exact at 10 threads (Step 5 probe), so the variance
+  comes from other multithreaded operations in the forward pass.
+- **So `--fast-scatter`'s reproducibility has a precondition:** `torch.set_num_threads(1)`. Any
+  speedup claim has to state the thread count. The 5.82× end-to-end ratio from Step 5 was measured at
+  10 threads, where results are not reproducible run to run. At 20 frames the reproducible
+  single-thread configuration costs about 1.9× the default-thread wall time (129 s vs 69 s).
+
+### What this does NOT establish, and was not guessed at
+
+- **Reproducible is not the same as equal to the loop.** Single-thread fast differs from the loop
+  pass on 3,088 points. The loop pass ran at 10 threads, so this data cannot say whether the gap comes
+  from the shim or from the thread count changing arithmetic elsewhere in the graph. Separating them
+  needs a single-threaded loop pass (about 40 minutes for 20 frames). **Not run.**
+- **The loop path's own per-point reproducibility at 10 threads is untested.** Step 5's two 200-frame
+  loop runs agreed at the metric level, which is the only basis for calling that path reproducible.
+  [!] Option 2 (Step 6, now running) uses that path at 10 threads, so its FRNet labels carry this
+  caveat until it is tested.
+- **Headline metrics stay insensitive:** 92.68% ± 0.005 pp across all five passes on this slice, and
+  90.3% / 65.2% on 200 frames in every earlier run.
