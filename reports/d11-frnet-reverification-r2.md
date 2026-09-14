@@ -35,7 +35,7 @@ This is a running log, updated as each step closes.
 | 3 fine-tune | **SKIPPED: not needed for the goal** (see below) |
 | 4 eval pretrained checkpoint | **DONE: 90.3% point accuracy / 65.2% mIoU / 61.1% drivable, on the independently sourced checkpoint** |
 | 5 end-to-end speedup | **timed (5.82x wall, all runs trusted) but its correctness check FAILED: `--fast-scatter` runs disagree per class, run to run. STOPPED.** Cause not established |
-| 6 plan-regret delta | **DONE (loop path, no `--fast-scatter`): delta +0.997 longitudinal / +0.449 lateral** |
+| 6 plan-regret delta | **DONE, REPRODUCIBLE: +1.069 longitudinal / +0.567 lateral** (`--fast-scatter --threads 1`, two bit-identical runs); supersedes the 10-thread +0.997 / +0.449 |
 
 ## Step 1: `--fast-scatter` wiring (read directly, not assumed)
 
@@ -501,3 +501,49 @@ Step 6's FRNet labels came from the loop path at 10 threads, so they carry this 
 its effect on the regret delta was not measured. Step 6 is therefore re-run in the configuration now
 proven exact and reproducible: `--fast-scatter` with 1 thread. It runs twice, so the deliverable's own
 reproducibility is shown rather than assumed.
+
+## Step 6, re-run reproducibly: `--fast-scatter --threads 1`, twice, and the runs are bit-identical
+
+**Why:** R-j round 2 showed that at the default 10 threads neither path is reproducible per point, and
+that with 1 thread `--fast-scatter` is bit-identical to the port's loops. The first Step 6 used the loop
+path at 10 threads, so it was re-run twice in the proven configuration. Every run was gated and had its
+checkpoint SHA-256 verified first; state after each run was OK (2400/2400 MHz, commit 12.35–12.62 of
+15.73 GB). Evidence: `reports/bench/plan_regret_frnet_delta_t1_runA.json`, `..._runB.json`.
+
+```
+run A  M_gt digest 2f0f5636f3033c9c   M_frnet digest 41ad78eedfa97f06   acc 90.3% (0.9030358642528131)
+       longitudinal  R_gt 1.160  R_frnet 2.230  delta +1.069191   64/64 found, 0 blocked
+       lateral       R_gt 1.142  R_frnet 1.710  delta +0.567144   64/64 found, 0 blocked
+run B  identical in every field: same M_frnet digest 41ad78eedfa97f06, same accuracy, same regrets
+FRNet inference 6.15 / 6.09 s per frame (vs 19.52 s per frame on the 10-thread loop path)
+```
+
+### The reproducible result, which supersedes the 10-thread one
+
+| family | R, ground-truth labels | R, FRNet labels | **delta (reproducible)** | 10-thread loop run | difference |
+|---|---|---|---|---|---|
+| longitudinal | 1.160 | 2.230 | **+1.069** | +0.997 | +0.073 |
+| lateral | 1.142 | 1.710 | **+0.567** | +0.449 | +0.118 |
+
+- **Two runs are bit-identical:** the FRNet map digest, label accuracy and every regret field match.
+  The deliverable now reproduces exactly.
+- **The ground-truth baseline is unchanged** (digest `2f0f5636f3033c9c`, the same as the oracle
+  control).
+- **The finding stands and is slightly larger:** FRNet labels raise plan regret by +1.069
+  longitudinal (+92%) and +0.567 lateral
+  (+50%).
+
+### What the 10-thread vs 1-thread comparison teaches
+
+The two configurations' labels differ in only about 0.06% of points: accuracy 0.9030359
+against 0.9030913. **Yet the lateral delta moved by +0.118 (about
+26%) and the longitudinal by +0.073
+(about 7%).** Plan regret is sensitive to small label
+changes. The lateral figure in particular is plainly positive, but its exact value should be read with that
+sensitivity in mind. The longitudinal effect is robust across both configurations.
+
+### Limits that still apply
+
+One schedule (`5/10/20/40`), one 200-frame slice of seq 08, motion held at ground truth, and an
+independently sourced checkpoint (not the 4 Sep file). Reproducibility now holds only for a pinned thread
+count of 1.
