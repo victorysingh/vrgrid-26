@@ -445,3 +445,59 @@ lateral ones. Both query families found paths in all 64 queries in both arms, wi
   reproducibility at 10 threads is untested; so far it rests only on metric-level agreement. How much
   the delta would move between runs is not measured.
 - **Cost:** FRNet inference on CPU, loop path, 19.52 s per frame (3,903 s for 200 frames).
+
+## R-j round 2: both open questions answered, R-j resolved
+
+The same harness (`reports/harnesses/frnet_pred_diff.py`), frames 0–19 of seq 08, 2,471,164 points,
+launched at 17:53:37. **Every pass was gated first, and every gate passed:** 2400/2400 MHz, commit
+12.32–12.64 of 15.73 GB. Three new passes were added to the five from round 1:
+
+| pass | `--fast-scatter` | intra-op threads | wall | accuracy (20 frames) |
+|---|---|---|---|---|
+| loop (round 1) | no | 10 | 405 s | 92.6849% |
+| **loopB** | no | 10 | 395 s | 92.6862% |
+| **loop1a** | no | **1** | 898 s | 92.6882% |
+| **loop1b** | no | **1** | 914 s | 92.6882% |
+| fast1a / fast1b (round 1) | yes | 1 | 129 s each | 92.6882% |
+| fastA / fastB (round 1) | yes | 10 | 69 s each | 92.6835% / 92.6886% |
+
+The pairs that answer the questions (full matrix in `reports/bench/rj_round2_pred_diff.json`):
+
+```
+rj_loop1a  vs rj_fast1a      0 points differ   (and loop1a=loop1b=fast1a=fast1b: all 0)
+rj_loop    vs rj_loopB   1,446 points differ, in 20/20 frames
+rj_fastA   vs rj_fastB   1,895 points differ, in 20/20 frames   (round 1)
+```
+
+### Answers
+
+1. **Does single-thread `--fast-scatter` equal the single-thread loop? Yes, exactly: 0 differing
+   points.** All four single-thread passes (two fast, two loop) are identical on every point. So the
+   3,088-point gap in round 1 was the thread count, not the shim. **The shim is exact in the full
+   model once the thread count is pinned.**
+2. **Is the loop path reproducible per point at 10 threads? No: two passes differ in 1,446 points.**
+   The loop path is as non-reproducible at default threads as `--fast-scatter` (1,895). **The run-to-run
+   variance belongs to PyTorch's intra-op thread pool and affects both paths equally.** It was never
+   introduced by the shim.
+
+No reverse-engineering was needed: the diff separated the two effects cleanly. A module-level
+divergence locator was prepared in case it did not, and it was deleted unused.
+
+### What the standing `--fast-scatter` claim becomes
+
+- **Correct:** with `torch.set_num_threads(1)`, `--fast-scatter` produces per-point predictions
+  bit-identical to the port's own loops on real data, and both are reproducible run to run.
+- **Correct:** at the default thread count, neither path is reproducible per point: roughly 0.05–0.08%
+  of points change between runs. Headline metrics are unaffected at printed precision.
+- **The reproducible, like-for-like speedup is about 7.0×:** at 1 thread, 20 frames, 129 s with
+  `--fast-scatter` against 898–914 s without, with identical outputs. Step 5's 5.82× was measured at 10
+  threads, so it compares two non-reproducible configurations; treat it as a wall-time ratio only.
+- **Correction to an estimate made before this round:** the single-thread loop pass was estimated at
+  about 8 minutes. It took about 15.
+
+### Consequence for Step 6
+
+Step 6's FRNet labels came from the loop path at 10 threads, so they carry this run-to-run noise, and
+its effect on the regret delta was not measured. Step 6 is therefore re-run in the configuration now
+proven exact and reproducible: `--fast-scatter` with 1 thread. It runs twice, so the deliverable's own
+reproducibility is shown rather than assumed.

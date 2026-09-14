@@ -206,6 +206,11 @@ def main() -> int:
     ap.add_argument("--checkpoint", default="checkpoints/frnet-semantickitti_seg.pth")
     ap.add_argument("--fast-scatter", action="store_true",
                     help="scripts/frnet_fast_scatter.py, verified before use")
+    ap.add_argument("--threads", type=int, default=None,
+                    help="torch.set_num_threads(N) before the model is built. OPEN-ITEMS R-j: at "
+                         "the default thread count FRNet predictions are NOT reproducible per point "
+                         "on either path; with 1 thread --fast-scatter is bit-identical to the loops "
+                         "and reproducible. Use 1 for any number that has to reproduce.")
     ap.add_argument("--motion", choices=["gt", "none"], default="gt",
                     help="gt: moving-* stays ground truth (isolates segmentation). "
                          "none: every point takes FRNet's class")
@@ -215,12 +220,15 @@ def main() -> int:
     ap.add_argument("--json", default=None, help="also write the results here")
     args = ap.parse_args()
 
+    if args.threads is not None and not args.oracle:
+        import torch
+        torch.set_num_threads(args.threads)
     score = {"correct": 0, "total": 0, "infer_s": 0.0}
     predict = (_oracle_predictor(score) if args.oracle
                else _frnet_predictor(Path(args.checkpoint), args.fast_scatter, score))
     arm = "oracle (ground truth through the FRNet path)" if args.oracle else "FRNet"
     print(f"sequence {args.seq}, frames 0-{args.frames - 1}, schedule {SCHEDULE}, "
-          f"motion={args.motion}, second arm = {arm}")
+          f"motion={args.motion}, second arm = {arm}, threads={args.threads or 'default'}")
 
     t0 = time.perf_counter()
     _fresh_ground()
@@ -253,6 +261,7 @@ def main() -> int:
 
     out = {"sequence": args.seq, "frames": args.frames, "schedule": SCHEDULE,
            "motion": args.motion, "oracle": args.oracle, "fast_scatter": args.fast_scatter,
+           "threads": args.threads,
            "checkpoint": None if args.oracle else args.checkpoint,
            "label_point_accuracy": acc, "maps_bit_identical": identical,
            "common_support": float(mask.mean()), "families": {}}
