@@ -15,7 +15,6 @@ from vrgrid.gpu.visibility import apply_miss, visibility_cleanup
 from vrgrid.grid.fusion import occupancy_state
 from vrgrid.grid.schedule import load
 from vrgrid.perception import ground
-from vrgrid.run import engine as engine_mod
 from vrgrid.run.__main__ import iter_pipeline
 from vrgrid.run.engine import MapEngine
 
@@ -35,7 +34,9 @@ def timed_cleanup(self, frame, touched, ego, counters):
 
     def lap(name):
         nonlocal t
-        now = time.perf_counter(); T[name].append((now - t) * 1e3); t = now
+        now = time.perf_counter()
+        T[name].append((now - t) * 1e3)
+        t = now
 
     state = occupancy_state(self.handle.grid, self.thresholds,
                             out=self.occ_state, scratch=self.occ_scratch)
@@ -99,11 +100,13 @@ def run(cleanup=None, frames=N):
 s0 = machine_state.snapshot()
 print("  state before:", machine_state.line(s0))
 h_ship = run(None, 40)
-T.update({k: [] for k in LINES}); TOT.clear()
+T.update({k: [] for k in LINES})
+TOT.clear()
 h_probe = run(timed_cleanup, 40)
 print(f"  transcription == shipped _cleanup (map hash, 40 frames): {h_ship == h_probe}")
 
-T.update({k: [] for k in LINES}); TOT.clear()
+T.update({k: [] for k in LINES})
+TOT.clear()
 run(timed_cleanup, N)
 s1 = machine_state.snapshot()
 print("  state after: ", machine_state.line(s1))
