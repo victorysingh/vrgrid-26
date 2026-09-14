@@ -92,3 +92,20 @@ here.**
   file*. Its numbers will be reported as their own result and compared with 90.3% / 65.2%, not
   claimed as "the same run".
 - **C:** off the table.
+
+### Option B's source, identified but NOT downloaded (2026-09-14)
+
+Found by reading, not fetching. Nothing is downloaded while A is pending.
+
+- **Official repository:** https://github.com/Xiangxu-0103/FRNet. Its README says: *"We provide
+  the trained models for SemanticKITTI and nuScenes. The checkpoints can be downloaded from
+  here"*, linking a Google Drive folder.
+- **Folder:** https://drive.google.com/drive/folders/173ZIzO7HOSE2JQ7lz_Ikk4O85Mau68el
+- **File:** `frnet-semantickitti_seg.pth`, **38.5 MB**, modified **7 Dec 2023**, as shown in the
+  folder listing. It has the same name the scripts and `configs/frnet.yaml` expect. The folder
+  also holds `frnet-nuscenes_seg.pth` (38.5 MB), which is **not** the one to fetch.
+- **[!] No checksum is published,** by the README or the folder. If B is used, the SHA-256
+  computed on download becomes the only provenance record, alongside the URL and the listed
+  size and date. That still can't prove the file is identical to the 4 Sep copy, which has no
+  recorded hash either.
+
