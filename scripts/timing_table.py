@@ -501,11 +501,20 @@ def run_real(args, sched=None):
     # perception half happens inside the generator, during `next()`. Wrapping
     # only `engine.step` gave a FRAME row smaller than several of its own
     # stages and shares that summed to 156%.
+    # --semantics frnet: the opt-in DL mode. `getattr` because ablation_table.py calls
+    # run_real with its own argument namespace, which has no such attributes.
+    semantics_source = getattr(args, "semantics", "gt")
+    frnet = None
+    if semantics_source == "frnet":
+        from vrgrid.run.__main__ import open_frnet
+        frnet = open_frnet(fast_scatter=getattr(args, "fast_scatter", False),
+                           threads=getattr(args, "threads", None))
     # reuse_buffers: this loop steps each frame before pulling the next, so the
     # allocation-free transform path is safe here -- see iter_pipeline.
     frames = iter(iter_pipeline(args.seq, args.frames + 1,
                                 use_patchworkpp=not args.no_patchworkpp, timer=t,
-                                reuse_buffers=True))
+                                reuse_buffers=True, semantics_source=semantics_source,
+                                frnet=frnet))
     n = 0
     while True:
         t0 = time.perf_counter()
@@ -547,6 +556,15 @@ def main() -> None:
     ap.add_argument("--clip-class-ids", action="store_true",
                     help="--seq only: clip semantic ids to 15 so fusion's 4-bit "
                          "candidate accepts them (math §10.2)")
+    ap.add_argument("--semantics", default="gt", choices=["gt", "frnet"],
+                    help="with --seq: gt (default) times the pipeline on .label classes; "
+                         "frnet times the OPT-IN DL mode, FRNet inference inside the "
+                         "semantics stage. For the real-time figure run frnet on the GPU "
+                         "machine (AWS), not this CPU.")
+    ap.add_argument("--fast-scatter", action="store_true",
+                    help="with --semantics frnet: scripts/frnet_fast_scatter.py (verified)")
+    ap.add_argument("--threads", type=int, default=None,
+                    help="with --semantics frnet: torch.set_num_threads(N)")
     ap.add_argument("--frame-times", default=None, metavar="PATH",
                     help="with --seq: also write every frame's whole-frame time "
                          "(ms, startup frame excluded) as JSON, so p99 can be "
@@ -579,6 +597,11 @@ def main() -> None:
     # Same failure class as --alloc above, the other way round: --frame-times is
     # written only on the --seq path, so without --seq it would be silently
     # ignored and a pooled p99 would be computed from a file that never existed.
+    if args.semantics != "gt" and args.seq is None:
+        raise SystemExit("--semantics frnet requires --seq; the synthetic path has no scans "
+                         "for a network to label")
+    if args.semantics == "gt" and (args.fast_scatter or args.threads is not None):
+        raise SystemExit("--fast-scatter and --threads only apply to --semantics frnet")
     if args.frame_times and args.seq is None:
         raise SystemExit("--frame-times requires --seq; the synthetic path does not "
                          "record whole-frame samples")

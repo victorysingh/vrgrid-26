@@ -9,7 +9,10 @@ Stages (all JP's, `src/perception/`):
     loader.scans()          raw points + raw .label + GT pose, per frame
     transforms              sensor -> vehicle -> world  (docs/frames.md)
     range_image.project()   64x512 spherical image + inverse index (sensor frame)
-    semantics               semantic_labels() 19-class + is_moving()  (GT .label)
+    semantics               semantic_labels() 19-class  (GT .label -- the DEFAULT)
+                            or FRNet predictions with `--semantics frnet` (opt-in DL mode)
+    motion                  is_moving()  (GT .label `moving-*` in BOTH modes: FRNet has
+                            no motion output, and that is disclosed wherever the mode is)
     ground.segment_ground_or_fallback()  Patchwork++ mask, or the semantic-class
                             fallback (loudly) when pypatchworkpp is absent
     reflectivity.normalise() rho_hat -> one byte  (KITTI: rho_hat = I; the
@@ -56,10 +59,12 @@ class PerceptionFrame:
     range_image: np.ndarray        # (H, W, 5)
     inverse_index: np.ndarray      # (H, W) int32
     ground_method: str             # "patchworkpp" | "semantic_fallback" (ground.py)
+    semantic_source: str = "gt"    # "gt" (.label files, default) | "frnet" (opt-in DL mode)
 
 
 def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True,
-                  timer=None, start_frame: int = 0, reuse_buffers: bool = False):
+                  timer=None, start_frame: int = 0, reuse_buffers: bool = False,
+                  semantics_source: str = "gt", frnet=None):
     """Yield a PerceptionFrame per scan of `seq`.
 
     `start_frame` skips ahead before the first yield (default 0, so existing
@@ -77,8 +82,26 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
     `loader.scans` is a generator, so the `load` stage times the pull of one
     scan off it rather than the whole sequence -- which is the per-frame cost
     the 10 Hz budget is about.
+
+    `semantics_source` (default "gt") picks where the 19-class labels come from.
+    "gt" reads the SemanticKITTI `.label` files, which is what every benchmark in
+    this repository measures. "frnet" is the OPT-IN deep-learning mode (SIH26053 asks
+    for a DL pipeline): `frnet` must be a `semantics.FRNetInference` -- anything with
+    `infer_points((N, 4) float32) -> (N,) int32, -1 = ignore` -- and each frame's
+    labels are its predictions on that raw scan. Build it with `open_frnet()`.
+
+    [!] Motion is `is_moving(raw_labels)` in BOTH modes. FRNet has no motion output,
+      so "moving" stays ground truth, and anything reporting the DL mode must say so.
+    [!] FRNet on this CPU costs seconds per frame, and its labels reproduce run to run
+      only with `torch.set_num_threads(1)` (OPEN-ITEMS R-j).
     """
     from vrgrid.perception import ground, loader, range_image, reflectivity, semantics, transforms
+
+    if semantics_source not in ("gt", "frnet"):
+        raise ValueError(f"semantics_source must be 'gt' or 'frnet', not {semantics_source!r}")
+    if semantics_source == "frnet" and frnet is None:
+        raise ValueError("semantics_source='frnet' needs frnet=open_frnet() "
+                         "(a semantics.FRNetInference)")
 
     def stage(name):
         return timer.stage(name) if timer is not None else nullcontext()
@@ -120,7 +143,13 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
         with stage("range_image"):
             ri, inv = range_image.project(points)
         with stage("semantics"):
-            semantic = semantics.semantic_labels(raw_labels)
+            if semantics_source == "frnet":
+                # The model's labels, on the raw sensor-frame scan -- the same input
+                # scripts/frnet_eval.py scores. Same dtype and ignore convention (-1)
+                # as semantic_labels(), so nothing downstream changes shape.
+                semantic = frnet.infer_points(np.asarray(points, dtype=np.float32))
+            else:
+                semantic = semantics.semantic_labels(raw_labels)
         with stage("motion"):
             moving = semantics.is_moving(raw_labels)
 
@@ -154,8 +183,41 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
             range_image=ri,
             inverse_index=inv,
             ground_method=ground_method,
+            semantic_source=semantics_source,
         )
         i += 1
+
+
+def open_frnet(fast_scatter: bool = False, threads: int | None = None):
+    """The opt-in DL mode's model: `semantics.FRNetInference`, set up reproducibly.
+
+    `threads` calls `torch.set_num_threads` BEFORE the model is built. `threads=1` is
+    what makes FRNet's labels reproducible run to run (OPEN-ITEMS R-j); the default
+    thread count does not. `fast_scatter` applies `scripts/frnet_fast_scatter.py`
+    after its own verify -- bit-identical to the port's loops at one thread, and the
+    difference between seconds and a minute per frame on a CPU.
+
+    The checkpoint is `configs/frnet.yaml`'s path (or $VRGRID_FRNET_CHECKPOINT),
+    resolved from the working directory, so run from the repository root.
+    """
+    import torch
+
+    if threads is not None:
+        torch.set_num_threads(threads)
+    if fast_scatter:
+        import sys
+        from pathlib import Path
+
+        scripts = Path(__file__).resolve().parents[2] / "scripts"
+        if not (scripts / "frnet_fast_scatter.py").exists():
+            raise FileNotFoundError(f"--fast-scatter needs {scripts / 'frnet_fast_scatter.py'}")
+        sys.path.insert(0, str(scripts))
+        from frnet_fast_scatter import enable
+
+        enable(verify=True)
+    from vrgrid.perception.semantics import FRNetInference
+
+    return FRNetInference()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -187,6 +249,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--palette", default="semantickitti", choices=["semantickitti", "groups"],
                    help="class colours: the 19-class standard, or 7 colourblind-safe groups")
     p.add_argument("--no-patchworkpp", action="store_true", help="use the semantic-class ground proxy")
+    p.add_argument("--semantics", default="gt", choices=["gt", "frnet"],
+                   help="gt (default): 19-class labels from the .label files, as every "
+                        "benchmark uses. frnet: OPT-IN deep-learning mode, labels predicted "
+                        "by FRNet on each raw scan. Motion stays ground truth in both.")
+    p.add_argument("--fast-scatter", action="store_true",
+                   help="with --semantics frnet: apply scripts/frnet_fast_scatter.py (verified)")
+    p.add_argument("--threads", type=int, default=None,
+                   help="with --semantics frnet: torch.set_num_threads(N); 1 is required for "
+                        "reproducible labels (OPEN-ITEMS R-j)")
     p.add_argument("--features", action="store_true",
                    help="dashboard: draw the curb/pothole (math 7.4) and confidence "
                         "(7.5) layers. Recomputed every 20 frames, not every frame -- "
@@ -209,6 +280,14 @@ def main(argv=None) -> int:
         print(f"map: {engine.handle.allocated_slots:,} slots preallocated, "
               f"ghost removal {'OFF' if args.show_ghosts else 'ON'}")
 
+    if args.semantics != "frnet" and (args.fast_scatter or args.threads is not None):
+        raise SystemExit("--fast-scatter and --threads only apply to --semantics frnet")
+    frnet = None
+    if args.semantics == "frnet":
+        frnet = open_frnet(fast_scatter=args.fast_scatter, threads=args.threads)
+        print("semantics: FRNet predictions (opt-in DL mode); motion: ground-truth "
+              "moving-* labels -- FRNet has no motion output")
+
     view = None
     if args.viz or args.save:
         from vrgrid.dash.pipeline_view import PipelineView
@@ -228,7 +307,8 @@ def main(argv=None) -> int:
     # finishes with each frame before pulling the next. A dashboard view may hold
     # frames, so it keeps the allocating path.
     for frame in iter_pipeline(args.seq, args.frames, use_patchworkpp=not args.no_patchworkpp,
-                               start_frame=args.start_frame, reuse_buffers=view is None):
+                               start_frame=args.start_frame, reuse_buffers=view is None,
+                               semantics_source=args.semantics, frnet=frnet):
         ground_method = frame.ground_method
         counters = engine.step(frame) if engine is not None else None
         if counters is not None:

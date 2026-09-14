@@ -42,6 +42,13 @@ def main(argv=None) -> None:
     p.add_argument("--no-map", action="store_true",
                    help="perception only; skip the map back end and its occupied-cell surface")
     p.add_argument("--no-patchworkpp", action="store_true")
+    p.add_argument("--semantics", default="gt", choices=["gt", "frnet"],
+                   help="gt (default): .label classes. frnet: OPT-IN DL mode, FRNet "
+                        "predictions. Motion stays ground truth in both.")
+    p.add_argument("--fast-scatter", action="store_true",
+                   help="with --semantics frnet: scripts/frnet_fast_scatter.py (verified)")
+    p.add_argument("--threads", type=int, default=None,
+                   help="with --semantics frnet: torch.set_num_threads(N); 1 reproduces (R-j)")
     p.add_argument("--features", action="store_true",
                    help="draw the curb/pothole (math 7.4) and confidence (7.5) "
                         "layers. Recomputed every 20 frames and once at the end, "
@@ -56,7 +63,7 @@ def main(argv=None) -> None:
         return
 
     from vrgrid.grid import schedule as schedule_mod
-    from vrgrid.run.__main__ import iter_pipeline
+    from vrgrid.run.__main__ import iter_pipeline, open_frnet
     from vrgrid.run.engine import MapEngine
 
     from .pipeline_view import PipelineView
@@ -66,10 +73,17 @@ def main(argv=None) -> None:
     view = PipelineView(sched, spawn=args.save is None, save_path=args.save,
                         color_by=args.color_by, ghost_removal=not args.show_ghosts,
                         palette=args.palette, engine=engine, features=args.features)
+    if args.semantics != "frnet" and (args.fast_scatter or args.threads is not None):
+        raise SystemExit("--fast-scatter and --threads only apply to --semantics frnet")
+    frnet = None
+    if args.semantics == "frnet":
+        frnet = open_frnet(fast_scatter=args.fast_scatter, threads=args.threads)
+        print("semantics: FRNet predictions (opt-in DL mode); motion: ground-truth moving-* labels")
     n = 0
     ground_method = None
     for frame in iter_pipeline(args.seq, args.frames, use_patchworkpp=not args.no_patchworkpp,
-                               start_frame=args.start_frame):
+                               start_frame=args.start_frame,
+                               semantics_source=args.semantics, frnet=frnet):
         ground_method = frame.ground_method
         if engine is not None:
             engine.step(frame)
