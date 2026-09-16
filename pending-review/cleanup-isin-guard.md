@@ -1,5 +1,7 @@
 # pending-review: `cleanup`'s allocation is `np.isin` in an argument — 21× and 3.9× available
 
+> **[STATUS 2026-09-16] APPLIED on `jp/p99-alloc-fixes` in `d540618`, awaiting Shrestha's review** (`engine.py` is his). The "nothing applied" status line below is historical, from when this was written.
+
 > **[!] CORRECTION 2026-09-14 — the title overstates it.** `np.isin` was the
 > *second*-largest allocator in `_cleanup` (6.40 MB), behind **`_centres`
 > (7.09 MB, 10.78 ms p50)**, which I had not measured. The LUT change below is

@@ -1,5 +1,7 @@
 # pending-review: `transform_points` allocates 10.86 MB per frame, and that is the p99 tail
 
+> **[STATUS 2026-09-16] APPLIED on `jp/p99-alloc-fixes` in `12613df`, with JP's approval,** as an opt-in `reuse_buffers` scratch, so callers that retain frames keep the allocating path. Bit-identical, and transform p99 fell from 22.07 to 1.45 ms. Not pushed. The "nothing applied" status line below is historical.
+
 **Status:** proposal, **nothing applied**. `src/perception/transforms.py` is
 tracked, on the frame loop, and this is a performance change rather than a docs
 correction — so it waits.
