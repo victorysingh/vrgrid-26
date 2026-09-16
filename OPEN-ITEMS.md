@@ -129,8 +129,8 @@ The fix direction is measured, not speculative: two estimators making one pass e
 | **R-a** — commit the measurement harnesses | **Done**, each with a PROVENANCE header. | `2955b14`, `8318fed` |
 | **R-f** — seq 00 ring-1 residual | **Closed:** the singleton carrying state across sequences. | `reports/ring1-reproduction-investigation.md` §7 |
 | **R-e** — 99.87% vs 99.5% | **Resolved by recomputation:** 99.87% dead cells; README was right. | `3a43c19` |
-| "Zero allocation in the frame loop" | **Scoped, not retracted:** back end only (the front end allocates ~39.5 MB/frame on seq 08), and the CI test measures retained growth, not churn. `--alloc` now fails loudly with `--seq`. | commit not recorded in the original row |
-| **R-g** — extend the invariant to perception | **Done:** `test_no_retained_growth_in_the_perception_frame_loop`, asserting retained growth only. | commit not recorded in the original row |
+| "Zero allocation in the frame loop" | **Scoped, not retracted:** back end only (the front end allocates ~39.5 MB/frame on seq 08), and the CI test measures retained growth, not churn. `--alloc` now fails loudly with `--seq`. | `235986d` |
+| **R-g** — extend the invariant to perception | **Done:** `test_no_retained_growth_in_the_perception_frame_loop`, asserting retained growth only. | `8b40e44` |
 | **DL** — `--fast-scatter` re-verification (11 Sep) | Done, exact in both directions on CPU. Superseded in scope by R-j. | `ff774fe` |
 | ROS adapter scoping | **Done as design only.** | `0035850` |
 
