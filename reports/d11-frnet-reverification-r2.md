@@ -547,3 +547,53 @@ sensitivity in mind. The longitudinal effect is robust across both configuration
 One schedule (`5/10/20/40`), one 200-frame slice of seq 08, motion held at ground truth, and an
 independently sourced checkpoint (not the 4 Sep file). Reproducibility now holds only for a pinned thread
 count of 1.
+
+## Step 6, paired per query: the uncertainty of the delta, measured properly (2026-09-16)
+
+**Why.** The Step 6 delta was reported with a rough **unpaired** standard error (delta/SE about 5.0
+longitudinal and 2.6 lateral), and the lateral value was flagged as sensitive. Both arms answer the
+**same 64 planning queries**, so the correct uncertainty is over the per-query **differences**.
+
+**How.** `scripts/plan_regret_frnet_delta.py --fast-scatter --threads 1 --per-query`, seq 08, 200
+frames. `per_query_regrets()` is transcribed from `eval_synthetic.plan_regret_for` (same costmaps,
+same common-support restriction, same `plan_queries`, same `regret()` calls in the same order). The
+script **asserts** each arm's per-query mean equals `plan_regret_for`'s reported figure exactly, so
+the transcription cannot drift silently. `paired_stats()` gives the mean, SD and SE of the
+differences, a seeded 10,000-sample bootstrap 95% CI that resamples queries with each pair kept
+together, worse/equal/better counts, and an exact two-sided sign test. It is pinned by
+`tests/test_plan_regret_paired.py` (5 tests).
+
+**Checks before trusting it:**
+- **Oracle control, 40 frames:** the maps were bit-identical, the assertion held, and every paired
+  statistic was **exactly zero** in both families (0 worse, 0 better, sign-test p = 1).
+- **Real run:** FRNet map digest `41ad78eedfa97f06` and every aggregate field (R_gt, R_second, delta,
+  SDs, found/blocked counts, label accuracy, common support) are **identical** to the earlier
+  reproducible run `plan_regret_frnet_delta_t1_runA.json`.
+
+Evidence: `reports/bench/plan_regret_frnet_delta_t1_paired.json` (includes all 64 per-query regrets
+per arm).
+
+| family | paired mean diff | SD | SE | t | 95% bootstrap CI | worse / equal / better | sign test |
+|---|---|---|---|---|---|---|---|
+| **longitudinal** | **+1.069** | 1.447 | 0.181 | 5.91 | **[+0.730, +1.436]** | 49 / 1 / 14 | p = 1.1e-05 |
+| **lateral** | **+0.567** | 1.137 | 0.142 | 3.99 | **[+0.301, +0.846]** | 25 / 31 / 8 | p = 0.0046 |
+
+### What this establishes
+
+- **Both deltas are clearly above zero:** neither 95% CI comes close to it, and both sign tests are
+  small. The paired SEs are tighter than the rough unpaired ones (0.199 → 0.181
+  longitudinal, 0.173 → 0.142 lateral).
+- **The longitudinal effect is broad:** FRNet labels make 49 of 64 queries worse and
+  14 better.
+- **The lateral effect is concentrated:** 31 of 64 lateral queries are unaffected; among the
+  33 that change, 25 get worse and 8 better.
+- **The earlier "lateral is sensitive" caveat is now bounded.** The non-reproducible 10-thread value
+  (+0.449) lies inside the lateral CI, so run-to-run label noise at 10 threads moves the delta within
+  its measured uncertainty, not outside it.
+
+### What it does not establish
+
+The CI is over **these 64 planning queries on one map**: one schedule (`5/10/20/40`), one 200-frame
+slice of seq 08, and motion held at ground truth. The queries share that map, so this is uncertainty
+from the choice of queries, not across scenes, sequences or schedules. A different slice could give a
+different delta.

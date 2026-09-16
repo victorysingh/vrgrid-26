@@ -73,9 +73,8 @@ The fix direction is measured, not speculative: two estimators making one pass e
   checkpoint's. `4675e95`.
 - **Plan-regret delta (Step 6):** reproducible at `--fast-scatter --threads 1`, two bit-identical runs.
   FRNet labels raise plan regret from 1.160 to 2.230 (**+1.069**) longitudinal and from 1.142 to 1.710
-  (**+0.567**) lateral. The ground-truth arm is identical to the passed oracle control. The lateral
-  value is sensitive: ~0.06% label noise moved it by +0.118. This supersedes the 10-thread +0.997 /
-  +0.449. `5c19b96`.
+  (**+0.567**) lateral. The ground-truth arm is identical to the passed oracle control. This supersedes the
+  10-thread +0.997 / +0.449. `5c19b96`. **Paired per query (2026-09-16):** longitudinal +1.069, 95% CI [+0.730, +1.436], 49/1/14 worse/equal/better, sign p=1.1e-05; lateral +0.567, 95% CI [+0.301, +0.846], 25/31/8, sign p=0.0046. Both CIs exclude zero. The 10-thread lateral value lies inside the CI, so the earlier sensitivity is bounded. The CI covers the 64 queries on one map and one slice, not other scenes.
 - **Opt-in DL mode:** `--semantics frnet` in the pipeline, dashboard and timing table; motion stays
   ground truth. Its labels equal `frnet_eval.py`'s model on a real frame. `a26f7f0`.
 - **Accuracy by distance:** `--threads 1`, reproducible. 93.2% (0–10 m) / 88.1% (10–25 m) / 85.4%

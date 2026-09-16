@@ -3,6 +3,7 @@
 
     python scripts/plan_regret_frnet_delta.py --oracle --frames 40     # plumbing control
     python scripts/plan_regret_frnet_delta.py --fast-scatter           # the real run
+    python scripts/plan_regret_frnet_delta.py --fast-scatter --threads 1 --per-query  # + paired stats
 
 [!] NAMING. This script is the "three-way plan-regret comparison" asked for when
   D11 was reopened on 2026-09-14. "R2" ELSEWHERE IN THE DOCS REFERS TO A
@@ -58,6 +59,7 @@ wrong, and no FRNet number from this script means anything.
 import argparse
 import hashlib
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -66,10 +68,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from eval_synthetic import PLAN_QUERY_FAMILIES, costmaps_for, plan_regret_for  # noqa: E402
+from eval_synthetic import (  # noqa: E402
+    PLAN_QUERIES, PLAN_QUERY_FAMILIES, costmaps_for, plan_queries, plan_regret_for)
 from vrgrid.eval.harness import (  # noqa: E402
     build_gridmap, final_vehicle_xy, real_scans, run_sequence)
-from vrgrid.eval.plan_regret import common_support  # noqa: E402
+from vrgrid.eval.plan_regret import common_support, regret, restrict  # noqa: E402
 from vrgrid.eval.reference_map import build_from_scans  # noqa: E402
 from vrgrid.grid.fusion import CLASS_UNLABELLED  # noqa: E402
 from vrgrid.grid.schedule import load  # noqa: E402
@@ -197,6 +200,59 @@ def _oracle_predictor(score: dict):
     return predict
 
 
+def per_query_regrets(gm, reference, vehicle_xy, mask, family):
+    """Every query's `Regret`, transcribed from `eval_synthetic.plan_regret_for`.
+
+    Same costmaps, same common-support restriction, same `plan_queries(PLAN_QUERIES,
+    family=...)`, same `regret()` call, in the same order. `plan_regret_for` averages
+    these and keeps one representative; this keeps all of them so the two arms can be
+    compared query by query. main() asserts the per-query mean equals
+    `plan_regret_for`'s figure exactly, so the transcription cannot drift silently.
+    """
+    star, mine = costmaps_for(gm, reference, vehicle_xy)
+    if mask is not None:
+        star, mine = restrict(star, mask), restrict(mine, mask)
+    return [regret(star, mine, s, g) for s, g in plan_queries(PLAN_QUERIES, family=family)]
+
+
+def paired_stats(gt_vals, fr_vals, n_boot: int = 10_000, seed: int = 0) -> dict:
+    """Uncertainty of the delta over the SAME queries: statistics of per-query differences.
+
+    Both arms answer identical planning queries, so the honest uncertainty is over
+    `fr - gt` per query, not two independent means (the earlier rough unpaired
+    estimate). Returns the mean, SD and SE of the differences; a seeded bootstrap 95%
+    CI that resamples QUERIES (keeping each pair together); the worse / equal / better
+    counts (exact float comparison); and an exact two-sided sign test over the
+    non-tied queries.
+    """
+    a = np.asarray(gt_vals, dtype=np.float64)
+    b = np.asarray(fr_vals, dtype=np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"{a.size} ground-truth regrets vs {b.size} second-arm regrets -- unpaired")
+    d = b - a
+    n = int(d.size)
+    mean = float(d.mean()) if n else float("nan")
+    sd = float(d.std(ddof=1)) if n > 1 else 0.0
+    se = sd / math.sqrt(n) if n else float("nan")
+    if n:
+        idx = np.random.default_rng(seed).integers(0, n, (n_boot, n))
+        boots = d[idx].mean(axis=1)
+        ci = [float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))]
+    else:
+        ci = [float("nan"), float("nan")]
+    worse, better = int((d > 0).sum()), int((d < 0).sum())
+    k = worse + better
+    if k == 0:
+        p = 1.0
+    else:
+        m = min(worse, better)
+        p = min(1.0, 2 * sum(math.comb(k, i) for i in range(m + 1)) / 2 ** k)
+    t_stat = mean / se if se > 0 else (0.0 if mean == 0 else float("inf"))
+    return {"n": n, "mean_diff": mean, "sd_diff": sd, "se_diff": se, "t": t_stat,
+            "boot_ci95": ci, "worse": worse, "equal": n - k, "better": better,
+            "sign_test_p": p}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -217,6 +273,9 @@ def main() -> int:
     ap.add_argument("--oracle", action="store_true",
                     help="CONTROL: feed ground truth through the FRNet arm; the maps "
                          "must hash identically and the delta must be 0.000")
+    ap.add_argument("--per-query", action="store_true",
+                    help="also score every query in both arms and report PAIRED statistics of "
+                         "the per-query differences (SE, bootstrap CI, sign test)")
     ap.add_argument("--json", default=None, help="also write the results here")
     args = ap.parse_args()
 
@@ -279,6 +338,29 @@ def main() -> int:
             "sd_gt": r_gt.regret_sd, "sd_second": r_fr.regret_sd,
             "found": [r_gt.n_found, r_fr.n_found], "blocked": [r_gt.n_blocked, r_fr.n_blocked],
             "queries": r_gt.n_queries}
+        if args.per_query:
+            q_gt = per_query_regrets(gm_gt, reference, vehicle_xy, mask, family)
+            q_fr = per_query_regrets(gm_fr, reference, vehicle_xy, mask, family)
+            for q, agg, name in ((q_gt, r_gt, "gt"), (q_fr, r_fr, "second")):
+                fin = [x.regret for x in q if x.found and np.isfinite(x.regret)]
+                m = float(np.mean(fin)) if fin else float("inf")
+                if m != agg.regret:
+                    raise AssertionError(
+                        f"{family}/{name}: per-query mean {m!r} != plan_regret_for {agg.regret!r} "
+                        "-- the transcription has drifted; no paired statistic is trustworthy")
+            pairs = [(a.regret, b.regret) for a, b in zip(q_gt, q_fr)
+                     if a.found and b.found and np.isfinite(a.regret) and np.isfinite(b.regret)]
+            st = paired_stats([x[0] for x in pairs], [x[1] for x in pairs])
+            lo, hi = st["boot_ci95"]
+            print(f"    paired over {st['n']} queries: mean diff {st['mean_diff']:+.3f}  "
+                  f"SD {st['sd_diff']:.3f}  SE {st['se_diff']:.3f}  t {st['t']:.2f}  "
+                  f"95% bootstrap CI [{lo:+.3f}, {hi:+.3f}]  "
+                  f"worse/equal/better {st['worse']}/{st['equal']}/{st['better']}  "
+                  f"sign-test p={st['sign_test_p']:.2g}")
+            out["families"][family]["paired"] = st
+            out["families"][family]["per_query"] = {
+                "gt": [x.regret if (x.found and np.isfinite(x.regret)) else None for x in q_gt],
+                "second": [x.regret if (x.found and np.isfinite(x.regret)) else None for x in q_fr]}
     print("\n  delta = R_second - R_gt, both scored on M* over the common support.")
     if args.oracle and not identical:
         print("\n[!] CONTROL FAILED: the oracle arm did not reproduce M_gt. Do not "
