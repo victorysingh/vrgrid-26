@@ -446,6 +446,47 @@ ran at 1520/2400 MHz with ~8 GB over-committed and produced mutually contradicto
 numbers. That is D8's upgraded scope demonstrated end to end — the question was
 always answerable; the instrument was not, until its state was controlled.
 
+
+## 13. `ground` in the pipeline, answered from trusted data (2026-09-16)
+
+Section 12 left one hypothesis open: `ground`'s **11.13 ms** in-pipeline p99 − p50 spread is other
+stages' allocation, and should collapse once the `transform` and `cleanup` fixes are in. It could be
+tested without a new timing run. Every whole-frame bench on 2026-09-14 already recorded a per-stage
+`ground` row for each fresh-process run, with machine state checked before and after (D8). Harness:
+`reports/harnesses/ground_inpipeline_spread.py`, which reads the committed JSONs. Only runs whose
+state was trusted before **and** after are counted.
+
+| bench | code state | trusted runs | `ground` p99 − p50 per run (ms) | median |
+|---|---|---|---|---|
+| `baseline` | **before any fix** (main@2c952dd) | 3 | 1.40, 0.95, 6.78 | **1.40** |
+| `after_transform` | + transform scratch | 3 | 2.73, 4.83, 7.67 | 4.83 |
+| `after_both` | + cleanup LUT | 3 | 3.21, 3.64, 1.83 | 3.21 |
+| `after_reflectivity_centres` | + reflectivity skip, `_centres` | 3 | 5.33, 1.47, 1.20 | 1.47 |
+| `after_range_image` | + range_image selection | 5 | 2.18, 1.64, 1.65, 2.09, 5.02 | 2.09 |
+| `pooled_after_range_image` | same code, pooled-gate bench | 5 | 1.52, 2.74, 3.42, 2.74, 2.83 | 2.74 |
+
+Before the fixes: median **1.40 ms** over 3 runs. After them: median **2.46 ms** over 10 runs. The
+largest spread in any trusted run is 7.67 ms. `ground` p50 stays at 19.0–20.3 ms throughout.
+
+### What this answers
+
+- **The 11.13 ms in-pipeline spread does not reproduce on any trusted run, at any code state.** That
+  includes the baseline, before a single fix was applied.
+- **So the allocation hypothesis is not supported, and not needed.** `ground`'s in-pipeline tail was
+  already small before the fixes, so the fixes cannot be what made it small.
+- **In the pipeline, `ground` behaves as it does in isolation (§12):** a typical p99 − p50 of about
+  1–3 ms. That is not a stage with a structural tail.
+
+### What it does not answer, stated plainly
+
+- **The 11.13 ms itself is unexplained.** It came from the 2026-09-13 warm p99 probe, run before machine
+  state was recorded. §11 documents that the same session later ran at 1520/2400 MHz with about 8 GB
+  over-committed, which would fit. But that probe has no state record, so machine state is the most
+  likely explanation, not a proven one.
+- **The spread is not uniformly small.** Individual trusted runs reach 5–7.7 ms, and the worst single
+  frames reach 26–33 ms against a p50 of about 19.5 ms. Those occasional slow frames are real, rare, and
+  not attributed here.
+
 ## 9. Reproduce
 
 ```sh
