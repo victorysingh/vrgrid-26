@@ -118,7 +118,7 @@ def _fresh_ground():
     if not ground._HAVE_PATCHWORKPP:
         sys.exit("Patchwork++ is not installed: ground masks would come from the "
                  "labels and differ between the arms. Refusing to run.")
-    ground._estimator = None
+    ground.reset_estimator()
 
 
 def relabelled_scans(sequence, frames, predict, motion):

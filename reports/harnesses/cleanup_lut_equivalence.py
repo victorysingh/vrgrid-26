@@ -89,7 +89,7 @@ def _lut_cleanup(self, frame, touched, ego, counters):
 
 
 def run(label, patched):
-    ground._estimator = None                     # fresh estimator: D1
+    ground.reset_estimator()                     # fresh estimator: D1
     MapEngine._cleanup = _lut_cleanup if patched else _shipped_cleanup
     try:
         eng = MapEngine(load("5/10/20/40"), ghost_removal=True)

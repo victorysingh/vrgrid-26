@@ -84,7 +84,7 @@ def timed_cleanup(self, frame, touched, ego, counters):
 
 
 def run(cleanup=None, frames=N):
-    ground._estimator = None                     # D1: fresh estimator per run
+    ground.reset_estimator()                     # D1: fresh estimator per run
     orig = MapEngine._cleanup
     if cleanup is not None:
         MapEngine._cleanup = cleanup

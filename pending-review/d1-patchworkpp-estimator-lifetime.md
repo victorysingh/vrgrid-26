@@ -1,6 +1,8 @@
 # pending-review: D1 — who owns the Patchwork++ estimator's lifetime?
 
-**Status:** decision doc. **Nothing implemented.** `src/perception/ground.py` is untouched, as
+**Status: DECIDED 2026-09-18 — JP chose option A.** `ground.py` is unchanged (A requires no code change). The enforcement A was missing now exists: `tests/test_ground_reset_convention.py`. The four plain private pokes were migrated to the public call; the nine configured injections stay, which is A's accepted cost. **This doc is kept as the record of why**, and B/C remain the written-up path if the private injections ever become the problem.
+
+*Originally: decision doc, nothing implemented.* `src/perception/ground.py` is untouched, as
 instructed. This is JP's call (OPEN-ITEMS lists D1 as *"JP (design)"* and as the highest-impact
 item on the list).
 **Written:** 2026-09-18, against `jp/p99-alloc-fixes` @ `95ce927` (post-merge).
@@ -28,15 +30,16 @@ whole tree:
 | public `reset_estimator()` | **5 calls, 5 files** | `src/run/__main__.py:117`, `src/eval/harness.py:366`, `scripts/feature_report.py:84`, `scripts/gen_demo_rrds.py:82`, `scripts/gpu_parity.py:76` |
 | **assigns the private `ground._estimator` directly** | **13 assignments, 9 files** | 8 harnesses under `reports/harnesses/`, plus `scripts/plan_regret_frnet_delta.py:121` |
 
-(Counts exclude `ground.py` itself and the tests.)
+(Counts exclude `ground.py` itself and the tests. **These are the numbers as they stood when A was chosen**; the four plain pokes have since been migrated, leaving 9 assignments in 6 files, all configured injections.)
 
 **More than twice as many assignments reach into the private global as there are calls to the public
 API.** That is the finding. It is not carelessness: the public API cannot express what they need.
 
 - `ground._estimator = None` (e.g. `cleanup_lut_equivalence.py:92`, `ring1_estimator.py:69`) is just
   `reset_estimator()` spelled privately — these could switch today.
-- **`ground._estimator = _pw.patchworkpp(p)`** (`dump_costmaps.py:32`, `numiter_accuracy.py:58`,
-  `numiter_r1_r7.py:56`, `numiter_r7.py:60`, `ring1_population.py:37`) installs a **differently
+- **`ground._estimator = _pw.patchworkpp(p)` / `= build()`** — 9 assignments in 6 files
+  (`dump_costmaps.py`, `numiter_accuracy.py`, `numiter_r1_r7.py`, `numiter_r7.py`,
+  `ring1_estimator.py`, `ring1_population.py`) — installs a **differently
   configured** estimator — a different `num_iter`, for the R-7 / num-iter accuracy work. **There is
   no public way to do this at all.** `numiter_accuracy.py:19` documents the workaround in its own
   module docstring, which is how you can tell it is load-bearing rather than accidental.
@@ -100,11 +103,16 @@ than about the code.
 
 ## If anything is chosen, do this in the same commit
 
-1. Add a test that **fails when an entry point forgets the reset** — today none does. Simplest form:
-   assert that two `iter_pipeline` runs in one process hash identical maps, for each entry point, not
-   only the one `test_real_sequence_replay_is_identical` covers.
-2. Migrate the 13 private pokes. The 8 that are `= None` become the public call; the 5 that install a
-   configured estimator are the ones that decide whether B or C is enough.
+1. ~~Add a test that fails when an entry point forgets the reset.~~ **DONE** —
+   `tests/test_ground_reset_convention.py`, 5 tests, AST-based so it catches a *new* entry point
+   rather than a listed one. Verified non-vacuous by planting an offender and watching it fail by
+   name. It also found a real one on its first run: `reports/harnesses/ground_cost.py` (now
+   **OPEN-ITEMS R-k**), which benches `reps=3` without resetting and produced R-a's published
+   21.01 ms.
+2. ~~Migrate the private pokes.~~ **PARTLY DONE, and the split was not what this doc first said:**
+   **4** were plain `= None` (migrated to `reset_estimator()`, a literal no-op) and **9** install a
+   configured estimator, in 6 files — not 8 and 5. The 9 stay, and they are precisely the evidence
+   that would justify revisiting B or C later.
 3. Leave `reset_estimator()` in place either way — it is upstream's convention now, in
    `iter_pipeline`, `harness.py`, `feature_report.py`, `gen_demo_rrds.py` and `gpu_parity.py`, and
    removing it is a separate, outward-facing change.

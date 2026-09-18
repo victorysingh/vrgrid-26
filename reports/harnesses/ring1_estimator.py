@@ -66,7 +66,7 @@ def build_estimator():
 def measure(seq, mode):
     # always start from a clean slate so no mode inherits another's state
     ground._get_estimator = _ORIGINAL_GET
-    ground._estimator = None
+    ground.reset_estimator()
 
     if mode == "fresh_frame":
         # every call to the segmenter gets its own estimator
