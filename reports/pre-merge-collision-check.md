@@ -1,128 +1,121 @@
 # Pre-merge collision check — `jp/p99-alloc-fixes` against upstream
 
-*Run 2026-09-18 on JP's instruction, read-only. No rebase, no merge, no commit touching
-`src/run/engine.py` or `src/run/__main__.py`. The dry-run merge happened in a disposable worktree
-that was deleted afterwards.*
+*Read-only investigation. First pass 2026-09-18 with stale refs; **re-run the same day after JP
+authorised a fetch**, so the answers below come from upstream as it actually is. No rebase, no real
+merge, nothing pushed, and no commit touching `src/run/engine.py` or `src/run/__main__.py`. The
+dry-run merge ran in a disposable worktree that was deleted afterwards.*
+
+**Upstream as fetched 2026-09-18:** `vrgrid26/main` @ **`7dee296`** (17 Sep) — **59 commits** we do not
+have. `origin/main` (the old `Stxtics03/vrgrid`) is still `5e0ebf3` (5 Sep) and has nothing we lack;
+the active repository is **vrgrid-26**.
 
 ---
 
-## [!] What could NOT be checked, and why
+## 1. `reset_estimator()` fires ONCE PER RUN, not per frame
 
-JP asked for the diffs of **`03abd7b`** and **`6af6907`** (Shrestha's GPU port) against `engine.py`
-and `__main__.py`, and for a dry-run merge against **current `origin/main`**. Neither is possible
-from this clone as it stands:
-
-| asked | state here |
-|---|---|
-| read `03abd7b` | **commit not in this clone** (`git cat-file -t` fails) |
-| read `6af6907` | **commit not in this clone** |
-| `reset_estimator()` call frequency | **the symbol does not exist anywhere** in this clone: not in the working tree, not in any commit on any local branch (`git log --all -S`) |
-| merge current `origin/main` | `origin/main` here is **`5e0ebf3`, fetched 2026-09-11**, and has **0 commits** we do not already have. A dry-run against it is a no-op and would falsely report "no conflicts" |
-
-**No remote was contacted.** A fetch is still waiting on JP's explicit go-ahead.
-
-Newest refs in this clone: `origin/main` `5e0ebf3` (11 Sep) · `vrgrid26/main` `0c769c9` (13 Sep) ·
-local `main` `2c952dd` (14 Sep) · `HEAD` `4e81220` (16 Sep).
-
-**Everything below about the 16–17 Sep GPU port, Aakash's `reset_estimator()` point-fix, D2/R3
-closure and the AWS T4 work comes from JP's message of 2026-09-18, not from anything verified here.**
-
-## 1. `reset_estimator()` — the question stands, unanswered
-
-The question was: does it fire **once per `iter_pipeline()` call** (once per run) or **once per
-frame**? It cannot be answered here, because neither the commit nor the symbol is present.
-
-What can be said precisely, so the answer is immediately usable when the commit is readable:
-
-- **If once per run:** our recorded timings stay valid *as descriptions of this branch's code*. A
-  per-run reset costs one estimator construction per process, outside the per-frame loop, so p50 /
-  p99 and the stage breakdown are unaffected.
-- **If once per frame:** every per-frame number we hold would no longer be comparable to upstream,
-  because upstream's `ground` stage would then carry an estimator construction **inside** the timed
-  loop. Ours would need re-measuring against current `main`, not merely rebasing.
-- **Either way**, our numbers were measured on **our** branch's code (`4e81220`), on one laptop
-  (D8). They describe this branch, and they were never a claim about upstream `main`.
-
-**How to settle it in one command once fetched:**
-`git show 03abd7b -- src/run/__main__.py src/perception/ground.py`, then check whether the call sits
-above the `while True:` loop in `iter_pipeline` (per run) or inside it (per frame).
-
-**Independent of that:** our own local determinism test still fails today
-(`tests/test_determinism.py::test_real_sequence_replay_is_identical`, re-run 2026-09-18), as expected
-for a clone that does not contain the point-fix.
-
-## 2. Do `d540618` and `697a2bd` still apply?
-
-**Against the newest upstream visible here (`vrgrid26/main`, 13 Sep): yes, cleanly and exactly.**
-
-- `git diff main vrgrid26/main -- src/run/engine.py` is **empty**: those 11 upstream commits do not
-  touch `engine.py` at all. The same holds for `src/run/__main__.py` and `src/perception/ground.py`.
-- So `_cleanup` and `_centres` on 13-Sep upstream are **byte-identical** to the versions our two
-  proposals were written against, and both diffs apply unchanged.
-
-**Against the 16–17 Sep GPU port: unknown, and genuinely at risk.** A port that moves split/merge and
-traversability to the device is likely to touch the same functions:
-
-- `d540618` replaces `np.isin(occupied, touched)` with a boolean LUT indexed by slot. If `_cleanup`'s
-  candidate selection now runs on the device, the LUT would need to be a device array, and the fix as
-  written is **CPU-shaped**.
-- `697a2bd` adds `_centres(..., sorted_slots=True)`, a NumPy `out=`-based fast path over contiguous
-  per-ring slices. If `_centres` is now a kernel, this is **redundant** rather than conflicting.
-
-Neither can be judged without reading the port. **Recommendation: do not ask Shrestha to review
-either proposal until the port is readable here** — a review request against a version he has already
-rewritten wastes his time.
-
-## 3. Dry-run merge — the real conflict surface available today
-
-In a disposable worktree at `4e81220`, `git merge --no-commit --no-ff vrgrid26/main`, nothing
-resolved, worktree deleted afterwards. **This is 13-Sep upstream, not "current main".**
+**Verified in the upstream source**, `src/run/__main__.py`:
 
 ```
-merge exit 1
-CONFLICT (content): Merge conflict in README.md
+ 61  def iter_pipeline(seq, max_frames, ...)
+ ...
+ 97      # ... (see `ground.reset_estimator`). Runs here, at the first frame's pull.
+ 98      ground.reset_estimator()
+ 99      i = 0
+100      while True:                      <-- the per-frame loop starts AFTER the reset
 ```
 
-| result | detail |
-|---|---|
-| **conflicted files** | **`README.md` only — 1 conflict hunk** |
-| merged cleanly, changed by their side | `docs/presentation/00-START-HERE.md`, `scripts/frnet_eval.py`, `scripts/frnet_finetune.py`, `src/gpu/kernels.py`, `tests/test_kernels.py` |
-| upstream commits touching `src/run/engine.py` | **0** |
-| upstream commits touching `src/run/__main__.py` | **0** |
-| upstream commits touching `transforms.py`, `range_image.py` | **0** |
+The call sits inside `iter_pipeline`, after the `loader.scans` generator is created and **before** the
+frame loop. One estimator construction per generator, i.e. **per run/replay**, outside the timed
+per-frame path. Other call sites follow the same shape: `harness.py:366`, `feature_report.py:84`,
+`gen_demo_rrds.py:82`, `gpu_parity.py:76`, each once per sequence/run. `tests/test_ground.py` pins it
+(`test_reset_estimator_drops_the_shared_patchworkpp_state`).
 
-**So against 13-Sep upstream the collision surface is one README hunk, and nothing in the functions
-our proposals touch.** The collision map's warning about `engine.py` and `__main__.py` is about the
-*16–17 Sep* port, which this clone cannot see.
+**So our per-frame timings are not invalidated by this change.** The 86.49 ms p50 result, the pooled
+p99 89.58 ms, and the stage-by-stage breakdown all stand as measurements of the code they were run on.
 
-## 4. What this branch actually holds, for the merge conversation
+**[!] Two corrections to the brief that requested this check:**
 
-43 commits, 59 files, +11,350 / −121 lines. The `src/` surface is small and concentrated:
+1. **`03abd7b` is not the `reset_estimator` commit.** It is Shrestha's *"gpu: the frame loop runs on
+   the card, bit-identical to CPU on real seq 08"* (16 Sep).
+2. **The point-fix is `3c26d47`** (14 Sep, **AakashH2006**), *"determinism: one Patchwork++ estimator
+   was shared by every run in a process"*. `6af6907` touches the call again as part of the port.
 
-| file | our change | owner |
+**What does affect comparability, separately:** upstream's frame loop is now a different program.
+`03abd7b` (+45/−14 on `engine.py`, +10/−2 on `__main__.py`) and `6af6907` (+96/−36 and +104/−47) add a
+device seam — `DevicePerception`, `DeviceFrame`, `MapEngine(device="cuda")`, `src/gpu/cuda_kernels.py`
+— and upstream reports **22 ms/frame on the card**. Our numbers describe the **CPU path before that
+port**, on one laptop (D8). They are not wrong; they are no longer the headline configuration.
+
+## 2. Do `d540618` (cleanup LUT) and `697a2bd` (`_centres` fast path) still apply? **Yes — exactly.**
+
+Compared function body against function body, not by hunk headers
+(`ast`-extracted from `main` and `vrgrid26/main`):
+
+| function | our base vs current upstream | upstream still has |
 |---|---|---|
-| `src/run/engine.py` | +97 / −3 (cleanup LUT, `_centres` fast path) | Shrestha |
-| `src/run/__main__.py` | +106 / −6 (opt-in DL mode, transform scratch wiring) | JP |
-| `src/perception/transforms.py` | +49 / −1 | JP |
-| `src/perception/range_image.py` | +31 / −10 | JP |
-| `src/perception/reflectivity.py` | +22 / −6 | JP |
+| `MapEngine._cleanup` | **byte-identical** | `np.copyto(guard, np.isin(occupied, touched))` — the exact line the LUT replaces |
+| `MapEngine._centres` | **byte-identical** | the per-ring `sel` mask loop; **no `_centres_sorted`** anywhere upstream |
 
-Everything else is additive: tests, harnesses, reports, scripts.
+So the GPU port did **not** rewrite either function. Both proposals apply to current upstream
+unchanged, and neither is stale or redundant. The assumption behind `697a2bd` also still holds:
+upstream's `_cleanup` still passes `np.flatnonzero(...)`, which is ascending, so the `sorted_slots`
+fast path is still valid there.
 
-## 5. What would settle all three questions
+**One caveat for the review conversation, not a blocker:** with the device path in place, these two
+functions are on the **host** path. They still matter for CPU runs and for `MapEngine()` without
+`device="cuda"`, but "how much does this save" now depends on which path is being timed. Worth saying
+explicitly when the proposals go to Shrestha.
 
-One read-only fetch (`git fetch vrgrid26 && git fetch origin`), then:
+## 3. Dry-run merge against current upstream — the real conflict list
 
-1. `git show 03abd7b -- src/run/__main__.py src/perception/ground.py` — the reset's call frequency.
-2. `git diff HEAD origin/main -- src/run/engine.py` — whether `_cleanup` / `_centres` survive in the
-   form the two proposals assume.
-3. The dry-run merge repeated against the fetched `origin/main`, for the real conflict list.
-4. Whether `docs/gpu-lane/t4/` exists upstream — i.e. whether the FRNet fine-tune actually ran.
+`git merge --no-commit --no-ff vrgrid26/main` at `8a546f8`, in a disposable worktree, nothing
+resolved, worktree deleted.
 
-**Separately, already verified here:** `docs/gpu-lane/02-AWS-RUNBOOK.md` (Shrestha's, 297 lines, in
-this clone since the 12 Sep migration) already covers instance choice, region, AMI, storage, security
-group, launch checklist, S3 staging — explicitly *"do not upload 84.8 GB"* and *"bring nothing back"*
-— environment, tmux discipline and failure modes. `reports/aws-gpu-realtime-runbook.md` (ours,
-`9b784e2`) **duplicates that and contradicts its transfer route**, while adding measurement steps his
-does not cover (the DL real-time figure, GPU reproducibility steps e/f, the 0–200 frame slice, result
-retrieval). It should become an addendum to his runbook rather than a second runbook.
+| file | conflict hunks | where |
+|---|---|---|
+| **`src/run/__main__.py`** | **6** | `iter_pipeline` (×2), its inner `stage()`, `perceive()` (×2), `main()` |
+| `scripts/timing_table.py` | 3 | — |
+| `dashboard/__main__.py` | 2 | — |
+| `OPEN-ITEMS.md` | 2 | — |
+| `README.md` | 1 | — |
+| **`src/run/engine.py`** | **0 — auto-merged** | both sides changed it; git reconciled them |
+
+58 further files merged cleanly while being modified by upstream.
+
+**Read that engine.py result carefully.** It auto-merged because upstream's `engine.py` changes are in
+`__init__`, the device seam and the step order, while ours are inside `_cleanup` and `_centres`, which
+upstream did not touch. **A clean auto-merge is not proof of semantic correctness** — the merged file
+must still be run (parity script plus our tests) before anyone trusts it.
+
+**The real work is `src/run/__main__.py`.** Upstream refactored `iter_pipeline` into a thin loop over a
+new `perceive()` function and added the device branch; our side added the opt-in DL mode
+(`semantics_source`, `frnet`, `open_frnet`) plus the `reuse_buffers` scratch wiring, in the same
+places. That is a genuine rewrite-versus-rewrite overlap and needs hand-merging into upstream's
+`perceive()` shape, not a mechanical resolution.
+
+## 4. Upstream state worth knowing before deciding anything
+
+- **D2/R3 closed upstream** by `df35fd5` (17 Sep), *"grid+eval: close Aakash's open items — D2 ring
+  boundary, ring-0 rho, per-ring reference"*. Our OPEN-ITEMS listed it as waiting on Aakash.
+- **Dashboard rebuilt** by AakashH2006 (14–15 Sep): the Demo/Details layout, KPI tiles and graphs.
+- **GPU lane** now has `05-FLOAT-AUDIT` through `11-AWS-RESUME`, `src/gpu/cuda_kernels.py`,
+  `scripts/gpu_parity.py`, and laptop logs under `docs/gpu-lane/laptop/`.
+- **AWS is armed but blocked.** `docs/gpu-lane/11-AWS-RESUME.md` (17 Sep) records the account
+  answering `OptInRequired` for EC2 and `NotSignedUp` for S3, with a 24 h activation window closing
+  **2026-09-18T12:34Z (18:04 IST)**, and `scripts/aws/auto.sh` polling every 10 minutes to run
+  preflight → dryrun → stage → launch → setup → run unattended. **No T4 results exist upstream yet**
+  (the only JSON under `docs/gpu-lane/` is the VRAM-contention file).
+- **`vrgrid26/staging`** is 0 ahead / 46 behind `main` — not where the work is.
+
+### Consequences for our branch
+
+1. **Our AWS runbook is superseded.** Upstream has `docs/gpu-lane/02-AWS-RUNBOOK.md` plus a scripted
+   `scripts/aws/t4.sh` and `auto.sh`, with the dataset staging already solved and credit guardrails
+   written. `reports/aws-gpu-realtime-runbook.md` should be withdrawn, keeping only the measurement
+   steps it adds (the DL real-time figure, GPU reproducibility steps e/f, the 0–200 frame slice) as an
+   addendum to theirs.
+2. **R-b needs restating, not retracting.** "Gate met, pooled p99 89.58 ms" is true of the CPU path
+   before the port. Upstream's 22 ms/frame is a different execution model on different hardware.
+3. **The two engine.py proposals are still live** and should go to Shrestha as-is.
+4. **The DL-mode work is the merge cost.** Our `__main__.py` changes have to be re-expressed against
+   upstream's `perceive()`.
