@@ -134,6 +134,28 @@ The fix direction is measured, not speculative: two estimators making one pass e
 | **R-g** — extend the invariant to perception | **Done:** `test_no_retained_growth_in_the_perception_frame_loop`, asserting retained growth only. | `8b40e44` |
 | **DL** — `--fast-scatter` re-verification (11 Sep) | Done, exact in both directions on CPU. Superseded in scope by R-j. | `ff774fe` |
 | ROS adapter scoping | **Done as design only.** | `0035850` |
+| Ring 0 has no ρ (`known-limitations` §2b) | **FIXED 2026-09-17.** Within-cell variance in `spread`; ring 0 ρ 1.17 [1.13–1.29], n = 11 (after the §11 band fix). Roughness in the regret costmap keeps between-cell variance only. | — |
+| §9.2 per-ring reference restricted to what each ring received (Aakash handover 2 Sep) | **DONE 2026-09-17.** `RingObservations`; `known-limitations` §9. | — |
+| §2b eleven-sequence table stale | **REGENERATED 2026-09-17.** Ring 1 ρ 1.39 [1.22–1.53] (was 1.45 [1.26–1.59]); deck docs updated. | — |
+| Money plot non-monotone step (Aakash handover 2 Sep) | **RESOLVED 2026-09-17** for seq 08 — paired over the same queries it is noise. Two real steps found elsewhere, see §5b. | — |
+| `python -m vrgrid.dash` CPU-only; stale GPU note in `dashboard/gpu_stats.py` | **FIXED 2026-09-17.** `--device cuda`. | — |
+| **D2 / R3** ring boundary under anisotropy | **FIXED 2026-09-17** (Shrestha, Aakash away). Ring membership decided per world-lattice block, coarse to fine; partition now CI-tested at adversarial speeds and headings. The defect was live at v = 0 on real seq 08 (nesting every frame, 0.224% of returns dropped); both 0 after. Snapping (part B) not used — see the status block in the file. | see `git log -- src/grid/lattice.py` |
+
+*(rows above this line from `jp/p99-alloc-fixes`; the six below and §5b are upstream's,
+merged 2026-09-18 from `vrgrid26/main` @ `7dee296`.)*
+
+---
+
+## 5b. New open items, 2026-09-17 — found while closing Aakash's list
+
+| # | item | notes |
+|---|---|---|
+| ~~**N-1**~~ | ~~Ring 3 on 08 / 09 / 10~~ **FIXED 2026-09-17.** Out-of-band heights were fused and re-basing hid saturation. 08 ρ 1.84 → 1.03. | `known-limitations` §11 |
+| ~~**N-5**~~ | ~~Band floor ~2–3 m below road level~~ **REBALANCED 2026-09-17** to −3.5 / +4.5 m (still 8 m), chosen by survey of all eleven sequences. Seq 04 ring 3 24.5 → 18.2 cm; every ring 3 within 4% of its own returns. | `known-limitations` §11 |
+| ~~**N-2**~~ | ~~Seq 07 uniform 20 cm regret spike~~ **FIXED 2026-09-17.** Footprint heights were count-weighted, which leaked neighbouring cells into planning cells; now area-weighted like the reference. Seq 07 monotone. | `known-limitations` §10 |
+| ~~**N-6**~~ | ~~Seq 09 uniform 40 cm < 20 cm regret~~ **FIXED 2026-09-17.** M*'s class came from the first ground return and the map's from all returns; M* now takes the majority of all static returns. No uniform curve has a backward step past 2 SE on any sequence. | `known-limitations` §10 |
+| **N-3** | **Seq 00 ring 2**: ρ 2.20 → 1.02 against its own returns. | Cross-look disagreement at 20–50 m, not coarsening. Cause open. `known-limitations` §9. |
+| **N-4** | GitHub #6 ("dashboard/ has been removed") is stale since PR #7 brought Rerun back. | Shrestha's own issue; close it when convenient. |
 
 ---
 

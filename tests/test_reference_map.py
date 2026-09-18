@@ -145,6 +145,9 @@ def test_block_stats_matches_a_brute_force_reduction(reference):
     thing every metric is built on. Checked against the obvious slow version
     on random blocks -- if these disagree, every number in the harness is
     wrong in a way no other test would catch."""
+    assert reference.within_var_cm2.max() > 0, (
+        "no cell of the fixture holds two different returns, so the "
+        "within-cell term below is not being checked")
     rng = np.random.default_rng(5)
     H, W = reference.shape
     for k in (1, 2, 4, 8, 10):
@@ -157,11 +160,20 @@ def test_block_stats_matches_a_brute_force_reduction(reference):
             c0 = j_lo[idx] - reference.j0
             block_obs = reference.observed[r0:r0 + k, c0:c0 + k]
             block_h = reference.height_cm[r0:r0 + k, c0:c0 + k][block_obs]
+            block_w = reference.within_var_cm2[r0:r0 + k, c0:c0 + k][block_obs]
 
             assert n[idx] == block_obs.sum()
             if block_h.size:
                 assert mean[idx] == pytest.approx(block_h.mean(), abs=1e-6)
-                assert var[idx] == pytest.approx(block_h.var(), abs=1e-6)
+                # law of total variance, cells weighted equally
+                assert var[idx] == pytest.approx(block_h.var() + block_w.mean(), abs=1e-6)
+        _, _, between = reference.block_stats(i_lo, j_lo, k, within_cell=False)
+        for idx in range(len(i_lo)):
+            r0, c0 = i_lo[idx] - reference.i0, j_lo[idx] - reference.j0
+            block_obs = reference.observed[r0:r0 + k, c0:c0 + k]
+            block_h = reference.height_cm[r0:r0 + k, c0:c0 + k][block_obs]
+            if block_h.size:
+                assert between[idx] == pytest.approx(block_h.var(), abs=1e-6)
 
 
 def test_block_stats_clips_at_the_edge_rather_than_wrapping(reference):
@@ -341,3 +353,200 @@ def test_build_can_stop_early(tmp_path, monkeypatch):
     write_sequence(tmp_path, "99", n_frames=6)
 
     assert build("99", max_frames=2).count.sum() < build("99").count.sum()
+
+
+# --- M* restricted to what each ring received (§9.2) -------------------------
+
+
+def _sparse_from_dense(reference):
+    from vrgrid.eval.reference_map import SparseReference
+
+    obs = reference.observed
+    r, c = np.nonzero(obs)
+    return SparseReference(reference.cell_m, r + reference.i0, c + reference.j0,
+                           reference.height_cm[obs], reference.within_var_cm2[obs],
+                           reference.count[obs])
+
+
+def test_sparse_block_stats_matches_the_dense_reference(reference):
+    """`SparseReference` answers the question `ReferenceMap.block_stats`
+    answers, over the same observed cells, including blocks that straddle the
+    reference's edge and blocks wholly outside it. Every §9.2 metric goes
+    through this contract, so the per-ring reference is only a fair comparison
+    if the two agree on identical data."""
+    sparse = _sparse_from_dense(reference)
+    rng = np.random.default_rng(6)
+    H, W = reference.shape
+    for k in (1, 2, 4, 8, 10):
+        i_lo = rng.integers(reference.i0 - 3 * k, reference.i0 + H + 3 * k, 400) // k * k
+        j_lo = rng.integers(reference.j0 - 3 * k, reference.j0 + W + 3 * k, 400) // k * k
+        n_d, m_d, v_d = reference.block_stats(i_lo, j_lo, k)
+        n_s, m_s, v_s = sparse.block_stats(i_lo, j_lo, k)
+        assert np.array_equal(n_s, n_d), k
+        assert np.allclose(sparse.block_stats(i_lo, j_lo, k, within_cell=False)[2],
+                           reference.block_stats(i_lo, j_lo, k, within_cell=False)[2],
+                           atol=1e-4)
+        assert np.array_equal(sparse.block_returns(i_lo, j_lo, k),
+                              reference.block_returns(i_lo, j_lo, k)), k
+        seen = n_d > 0
+        assert seen.any() and (~seen).any(), "the fixture must hit both cases"
+        assert np.allclose(m_s[seen], m_d[seen], atol=1e-6)
+        assert np.allclose(v_s[seen], v_d[seen], atol=1e-4)
+
+
+def test_ring_observations_rebuild_m_star_exactly(sequence):
+    """Every static return credited to one ring must rebuild M* itself: same
+    observed cells at the same lattice indices, same heights, same block
+    statistics. This is the test that catches a broken key packing -- a check
+    that compares two per-ring references against each other cannot, because
+    both go through the same packing."""
+    from vrgrid.eval.reference_map import RingObservations
+
+    scans = list(read_sequence(sequence, "99"))
+    m_star = build_from_scans(scans)
+    obs = RingObservations(1)
+    for pts, labels, pose in scans:
+        T = np.asarray(pose, dtype=np.float64)
+        keep = ~is_moving(labels)
+        world = np.asarray(pts, dtype=np.float64)[keep] @ T[:3, :3].T + T[:3, 3]
+        obs.add(np.zeros(len(world), np.int64), world)
+    got = obs.for_ring(0)
+
+    want = _sparse_from_dense(m_star)
+    assert got.n_cells == want.n_cells
+    order_g = np.lexsort((got.j, got.i))
+    order_w = np.lexsort((want.j, want.i))
+    assert np.array_equal(got.i[order_g], want.i[order_w])
+    assert np.array_equal(got.j[order_g], want.j[order_w])
+    assert np.allclose(got.height_cm[order_g], want.height_cm[order_w])
+    assert np.allclose(got.within_var_cm2[order_g], want.within_var_cm2[order_w], atol=1e-6)
+    assert np.array_equal(got.count[order_g], want.count[order_w])
+
+    k = 8
+    i_lo = (want.i // k * k)[::97]
+    j_lo = (want.j // k * k)[::97]
+    n_g, m_g, v_g = got.block_stats(i_lo, j_lo, k)
+    n_d, m_d, v_d = m_star.block_stats(i_lo, j_lo, k)
+    assert np.array_equal(n_g, n_d) and (n_d > 0).all()
+    assert np.allclose(m_g, m_d, atol=1e-6) and np.allclose(v_g, v_d, atol=1e-4)
+
+
+def test_the_packed_key_round_trips_negative_and_far_indices():
+    from vrgrid.eval.reference_map import _pack, _unpack
+
+    i = np.array([0, -1, 1, -(1 << 29), (1 << 29), 123456, -987654])
+    j = np.array([0, 1, -1, (1 << 30), -(1 << 30), -5, 7])
+    ui, uj = _unpack(_pack(i, j))
+    assert np.array_equal(ui, i) and np.array_equal(uj, j)
+    order = np.argsort(_pack(i, j))
+    assert np.all(np.diff(i[order]) >= 0), "keys must sort by i first"
+
+
+def test_an_empty_ring_reference_scores_nothing():
+    from vrgrid.eval.reference_map import RingObservations
+
+    obs = RingObservations(3)
+    obs.add(np.array([0, 0]), np.array([[1.0, 2.0, 0.1], [1.01, 2.0, 0.3]]))
+    n, _, _ = obs.for_ring(2).block_stats(np.array([0, 20]), np.array([40, 40]), 2)
+    assert list(n) == [0, 0]
+    n, mean, _ = obs.for_ring(0).block_stats(np.array([20]), np.array([40]), 1)
+    assert n[0] == 1 and mean[0] == pytest.approx(20.0)   # both returns, one cell
+
+
+def test_ring_observations_credit_each_return_to_the_ring_that_binned_it(sequence):
+    """The per-ring reference is only meaningful if a return is credited to
+    the ring whose cell integrated it. One frame through the harness, then the
+    map's own `bin_points` on the same ground returns: the slot each lands in
+    names its ring by buffer offset, and the per-ring references must hold
+    exactly those returns -- same 5 cm cells, same mean heights."""
+    from vrgrid.eval.harness import build_gridmap, run_sequence
+    from vrgrid.eval.reference_map import RingObservations
+    from vrgrid.grid.lattice import bin_points, new_bin_scratch
+    from vrgrid.grid.schedule import load as load_schedule
+    from vrgrid.grid.transient import separate
+
+    frame = next(iter(read_sequence(sequence, "99")))
+    pts, labels, pose = frame[0], frame[1], frame[-1]
+    ground = np.ones(len(pts), bool)
+    sched = load_schedule("5/10/20/40")
+    gm = build_gridmap(sched)
+    observed = RingObservations(len(sched.rings))
+    run_sequence(gm, [(pts, labels, ground, pose)], observed=observed)
+
+    T = np.asarray(pose, dtype=np.float64)
+    world = np.asarray(pts, dtype=np.float64) @ T[:3, :3].T + T[:3, 3]
+    static, _ = separate(labels)
+    w = world[static]
+    slots = bin_points(w[:, 0], w[:, 1], sched, gm.buffers,
+                       np.zeros(len(w), np.int64), new_bin_scratch(len(w), sched),
+                       gm.speed_ms, gm.vehicle_xy_m, gm.vehicle_yaw_rad)
+    for L, b in enumerate(gm.buffers):
+        mine = w[(slots >= b.offset) & (slots < b.offset + b.side * b.side)]
+        want = RingObservations(1)
+        want.add(np.zeros(len(mine), np.int64), mine)
+        got, exp = observed.for_ring(L), want.for_ring(0)
+        assert got.n_cells == exp.n_cells, L
+        assert np.array_equal(got.i, exp.i) and np.array_equal(got.j, exp.j), L
+        assert np.allclose(got.height_cm, exp.height_cm), L
+    assert sum(observed.for_ring(L).n_cells for L in range(4)) > 1000
+
+
+def test_ring_zero_has_a_rho(sequence):
+    """Until the within-cell term, ring 0 -- the finest ring, the one the
+    foveation argument is about -- had RMSE and no rho on any sequence,
+    because its one-cell footprint could never pass a `cells > 1` guard. It is
+    now scored wherever its cell holds more than one return. On this 4-frame
+    scene that is about a third of the ring's scored cells; on real sequences
+    at 40 frames it is 93-97% (`known-limitations.md` §2b)."""
+    from vrgrid.eval import metrics
+    from vrgrid.eval.harness import build_gridmap, run_sequence
+    from vrgrid.grid.schedule import load as load_schedule
+
+    scans = list(read_sequence(sequence, "99"))
+    m_star = build_from_scans(scans)
+    gm = build_gridmap(load_schedule("5/10/20/40"))
+    run_sequence(gm, [(p, lab, np.ones(len(p), bool), T) for p, lab, T in scans])
+
+    rho = metrics.coarsening_ratio_per_ring(gm, m_star)
+    rmse_cells = metrics._compared(gm, m_star, 0)[0].size
+    assert np.isfinite(rho[0]["rho"]) and rho[0]["n"] > 0
+    assert rho[0]["n"] > 0.2 * rmse_cells, (rho[0]["n"], rmse_cells)
+    assert rho[0]["spread_cm"] > 0
+
+
+def test_a_banded_reference_leaves_out_exactly_what_the_map_cannot_hold(sequence):
+    """`band=True` drops the ground returns outside the 8 m band around the
+    vehicle -- the ones `scatter` gives no height weight -- counts them, and
+    changes nothing else."""
+    scans = list(read_sequence(sequence, "99"))
+    plain = build_from_scans(scans)
+    banded = build_from_scans(scans, band=True)
+    assert banded.out_of_band_returns == 0          # the synthetic scene fits
+    assert np.array_equal(banded.count, plain.count)
+
+    pts, labels, pose = scans[0]
+    deep = np.vstack([pts, [[30.0, 0.0, -25.0], [31.0, 0.0, -25.0]]])
+    labels2 = np.concatenate([labels, np.array([40, 40], labels.dtype)])
+    banded = build_from_scans([(deep, labels2, pose)] + scans[1:], band=True)
+    assert banded.out_of_band_returns == 2
+    assert banded.observed.sum() == plain.observed.sum()
+    assert "outside the map's band" in repr(banded)
+
+
+def test_class_is_the_majority_of_all_static_returns_height_is_ground_only():
+    """One 5 cm cell: a road return on the ground, two vegetation returns
+    above it, one moving car. M*'s height must come from the ground return
+    alone, and its class from the majority of the STATIC returns --
+    vegetation -- because that is what the map's class layer is fused from.
+    Taking the class from the ground return made §7.1 bit 4 disagree at every
+    road edge with something over it (seq 09's regret step)."""
+    pts = np.array([[1.01, 2.01, -1.70], [1.02, 2.02, -0.40],
+                    [1.03, 2.03, -0.10], [1.04, 2.04, -1.00]])
+    labels = np.array([40, 70, 70, 252], dtype=np.uint32)     # road, veg, veg, moving car
+    ground = np.array([True, False, False, False])
+    ref = build_from_scans([(pts, labels, ground, np.eye(4))])
+    i, j = int(np.floor(1.01 / ref.cell_m)), int(np.floor(2.01 / ref.cell_m))
+    r, c = i - ref.i0, j - ref.j0
+    assert ref.count[r, c] == 1
+    assert ref.height_cm[r, c] == pytest.approx(-170.0)
+    assert ref.class_id[r, c] == 70

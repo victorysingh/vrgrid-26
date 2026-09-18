@@ -81,6 +81,7 @@ def real_scans(sequence, max_frames):
     from vrgrid.perception import ground, loader, semantics, transforms
 
     t_s_v = transforms.sensor_to_vehicle()
+    ground.reset_estimator()   # fresh Patchwork++ state per sequence
     for pts, labels, pose in loader.scans(sequence, max_frames=max_frames):
         vehicle_pts = transforms.transform_points(pts[:, :3], t_s_v)
         gmask, _ = ground.segment_ground_or_fallback(

@@ -435,17 +435,20 @@ def scatter(gm, points_m, class_id, is_ground, reflectivity=None,
       confusable thing in the file, so it is spelled out rather than implied:
 
       `points_m`       VEHICLE frame (x forward, y left, z up). Decides the
-                       RING, because foveation follows the vehicle, and the
                        measurement variance, because that depends on range
                        from the sensor.
       `points_world_m` WORLD frame. Decides the CELL, because cell identity is
                        world-anchored -- that is the whole reason the toroidal
-                       shift exists (§2.4). Defaults to `points_m`, which is
+                       shift exists (§2.4) -- and, since open item D2, the
+                       RING too: ring membership is decided per world-lattice
+                       block against the ring windows, with the vehicle coming
+                       in as `gm.vehicle_xy_m` and `gm.vehicle_yaw_rad`
+                       (`lattice.ring_of`). Defaults to `points_m`, which is
                        the stationary case and the one the unit tests use.
 
       Get this backwards and the map still builds, still looks plausible, and
       smears six frames of a moving vehicle onto one patch of ground. Ring
-      membership is relative; cell identity is absolute.
+      membership follows the vehicle; cell identity is absolute.
 
     The pose composition that produces `points_world_m` is
     `perception.transforms`, JP's; this function starts where the frames are
@@ -465,6 +468,7 @@ def scatter(gm, points_m, class_id, is_ground, reflectivity=None,
     """
     from vrgrid.gpu.kernels import (
         measurement_variance_cm2,
+        out_of_band,
         quantise_height,
         quantise_weight,
         scatter_atomic,
@@ -475,7 +479,7 @@ def scatter(gm, points_m, class_id, is_ground, reflectivity=None,
     pts = np.asarray(points_m, dtype=np.float64)
     if pts.ndim != 2 or pts.shape[1] != 3:
         raise ValueError(f"points must be (N, 3) in vehicle frame, got {pts.shape}")
-    x, y, z = pts[:, 0], pts[:, 1], pts[:, 2]
+    z = pts[:, 2]
 
     world = pts if points_world_m is None else np.asarray(points_world_m, dtype=np.float64)
     if world.shape != pts.shape:
@@ -487,8 +491,8 @@ def scatter(gm, points_m, class_id, is_ground, reflectivity=None,
     # flat_slot -- and in three other places, and the four spellings agreeing
     # was luck rather than design. See `lattice.bin_points`.
     scratch, out = gm.bin_scratch(pts.shape[0])
-    slots = bin_points(x, y, wx, wy, gm.schedule, gm.buffers, out, scratch,
-                       gm.speed_ms).copy()
+    slots = bin_points(wx, wy, gm.schedule, gm.buffers, out, scratch,
+                       gm.speed_ms, gm.vehicle_xy_m, gm.vehicle_yaw_rad).copy()
 
     # OUTSIDE and out-of-window both come through as -1, which the kernel
     # drops. It must be -1 and not 0: numpy would write cell 0 and pile the
@@ -518,8 +522,11 @@ def scatter(gm, points_m, class_id, is_ground, reflectivity=None,
     # allocates per call -- fine in a test, and 19 MB a frame in the loop,
     # which is more than the whole grid. See gpu/CLAUDE.md.
     scratch = getattr(getattr(gm, "allocation", None), "scratch", None)
-    args = (slots, quantise_height(z if height_m is None else
-                            np.asarray(height_m, dtype=np.float64)), w_q, refl,
+    height = z if height_m is None else np.asarray(height_m, dtype=np.float64)
+    # Ground outside the 8 m band is clamped by `quantise_height`; a clamped
+    # height is not a measurement, so it carries no height weight.
+    w_q = np.where(out_of_band(height), 0, w_q).astype(w_q.dtype)
+    args = (slots, quantise_height(height), w_q, refl,
             np.asarray(class_id, dtype=np.uint8), np.asarray(is_ground, dtype=bool))
     if gm.scatter_mode == "sorted":
         return scatter_sorted(*args, scratch=scratch)

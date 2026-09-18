@@ -29,6 +29,11 @@ from vrgrid.grid.schedule import load
 
 SCHEDULES = ["5/10/20/40", "5/10/50"]
 SPEEDS = [0.0, 5.0, 15.0, 30.0]
+# (vehicle world position, heading). Off-lattice positions, and headings that
+# break the symmetries the block bound has: +x, the diagonal, backwards, and
+# an angle with no special value.
+HEADINGS = [((37.0, -11.0), 0.0), ((37.03, -11.12), 0.7853981633974483),
+            ((-4.21, 250.4), 3.141592653589793), ((0.0, 0.0), -2.3)]
 
 
 def _sweep(n=20_000, seed=0, reach=140.0):
@@ -104,6 +109,18 @@ def test_ring_of_into_matches_ring_of(name, speed):
 
     got = ring_of_into(x, y, sched, speed, scratch["level"][:len(x)], scratch)
     want = ring_of(x, y, sched, speed)
+    assert np.array_equal(got, want)
+
+    # and away from the origin, at a heading, against shifted windows -- the
+    # world coordinates the frame path takes versus the vehicle-relative ones
+    # the reference takes, which is where a rounding difference would show
+    handle = _ring_layouts(sched)
+    for (vx, vy), yaw in HEADINGS:
+        bufs = _windows(handle, sched, vx, vy)
+        got = ring_of_into(x + vx, y + vy, sched, speed, scratch["level"][:len(x)],
+                           scratch, bufs, (vx, vy), yaw)
+        assert np.array_equal(got, ring_of(x, y, sched, speed, (vx, vy), yaw, bufs)), yaw
+    got = ring_of_into(x, y, sched, speed, scratch["level"][:len(x)], scratch)
 
     assert np.array_equal(got, want)
     assert got.dtype == want.dtype
@@ -127,11 +144,12 @@ def test_ring_of_into_covers_every_ring_and_outside():
 # --- the composition ---------------------------------------------------------
 
 
-def _reference_bin(xv, yv, xw, yw, sched, buffers, speed=0.0):
+def _reference_bin(xv, yv, xw, yw, sched, buffers, speed=0.0, vehicle=(0.0, 0.0),
+                   yaw=0.0):
     """The hand-rolled composition, written out one final time. This is the
     spelling `fusion.scatter` and `run/engine.py` used, and what `bin_points`
     has to reproduce before those call sites can be deleted."""
-    level = ring_of(xv, yv, sched, speed)
+    level = ring_of(xv, yv, sched, speed, vehicle, yaw, buffers)
     idx = np.full(len(xv), -1, dtype=np.int64)
     for layout, buf in zip(sched.rings, buffers):
         sel = level == layout.ring
@@ -151,23 +169,22 @@ def test_bin_points_matches_the_reference_path(name, speed):
     catches anything assuming a power of two."""
     sched = load(name)
     handle = _ring_layouts(sched)
-    wx, wy = 37.0, -11.0                  # world != vehicle, by an odd offset
-    buffers = _windows(handle, sched, wx, wy)
-
     xv, yv = _sweep()
-    xw, yw = xv + wx, yv + wy
     scratch = new_bin_scratch(len(xv), sched)
     out = np.zeros(len(xv), np.int64)
 
-    got = bin_points(xv, yv, xw, yw, sched, buffers, out, scratch, speed)
-    want = _reference_bin(xv, yv, xw, yw, sched, buffers, speed)
+    for (wx, wy), yaw in HEADINGS:        # world != vehicle, by odd offsets
+        buffers = _windows(handle, sched, wx, wy)
+        xw, yw = xv + wx, yv + wy
+        got = bin_points(xw, yw, sched, buffers, out, scratch, speed, (wx, wy), yaw)
+        want = _reference_bin(xv, yv, xw, yw, sched, buffers, speed, (wx, wy), yaw)
 
-    assert np.array_equal(got, want)
-    binned = int((got >= 0).sum())
-    assert binned > 0.3 * len(xv), (
-        f"only {binned} of {len(xv)} points binned -- the fixture is testing "
-        "an empty map, so the equivalence above proves little"
-    )
+        assert np.array_equal(got, want), yaw
+        binned = int((got >= 0).sum())
+        assert binned > 0.3 * len(xv), (
+            f"only {binned} of {len(xv)} points binned -- the fixture is testing "
+            "an empty map, so the equivalence above proves little"
+        )
 
 
 @pytest.mark.parametrize("name", SCHEDULES)
@@ -183,7 +200,7 @@ def test_every_ring_is_actually_exercised(name):
     xw, yw = xv + 37.0, yv - 11.0
     scratch = new_bin_scratch(len(xv), sched)
     out = np.zeros(len(xv), np.int64)
-    got = bin_points(xv, yv, xw, yw, sched, buffers, out, scratch)
+    got = bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (37.0, -11.0))
 
     for layout in handle.rings:          # storage geometry, not the schedule
         lo = layout.offset
@@ -192,14 +209,13 @@ def test_every_ring_is_actually_exercised(name):
     assert (got < 0).any(), "nothing fell outside, so the -1 path is untested"
 
 
-def test_the_two_frames_are_not_interchangeable():
-    """⚑ The failure this function exists to make impossible to write by hand.
-
-    Feeding world coordinates where vehicle coordinates belong does not raise
-    and does not produce an obviously broken map -- it changes which ring each
-    point lands in, and once the vehicle has driven past the last ring's
-    half-width every point reads as OUTSIDE. Asserted so the docstring's
-    warning is a fact rather than a claim.
+def test_the_vehicle_position_is_not_optional():
+    """⚑ The failure the old two-frame signature guarded against, in its new
+    shape. `bin_points` takes world points and the vehicle position; leave the
+    position at its default once the vehicle has driven 400 m and nothing
+    raises and nothing is dropped -- the windows still hold every point -- but
+    every block reads as 400 m away and lands in the coarsest ring. A map
+    that is all 40 cm cells looks fine from a distance.
     """
     sched = load("5/10/20/40")
     handle = _ring_layouts(sched)
@@ -209,14 +225,16 @@ def test_the_two_frames_are_not_interchangeable():
     xw, yw = xv + 400.0, yv               # the vehicle has driven 400 m
     scratch = new_bin_scratch(len(xv), sched)
     out = np.zeros(len(xv), np.int64)
+    coarsest = handle.rings[-1].offset
 
-    right = bin_points(xv, yv, xw, yw, sched, buffers, out, scratch).copy()
-    wrong = bin_points(xw, yw, xw, yw, sched, buffers, out, scratch).copy()
+    right = bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (400.0, 0.0)).copy()
+    wrong = bin_points(xw, yw, sched, buffers, out, scratch).copy()
 
-    assert (right >= 0).any(), "the correct call binned nothing"
-    assert (wrong >= 0).sum() == 0, (
-        "swapping the frames should put every point past the last ring after "
-        "400 m of travel -- if it does not, this test proves nothing"
+    assert ((right >= 0) & (right < coarsest)).any(), "the correct call used no fine ring"
+    assert np.array_equal(right >= 0, wrong >= 0), "the windows alone decide what is kept"
+    assert not ((wrong >= 0) & (wrong < coarsest)).any(), (
+        "without the vehicle position every block should read as far away -- "
+        "if it does not, this test proves nothing"
     )
 
 
@@ -244,11 +262,11 @@ def test_bin_points_allocates_nothing_in_the_loop():
     out = np.zeros(len(xv), np.int64)
 
     for _ in range(3):                       # warm
-        bin_points(xv, yv, xw, yw, sched, buffers, out, scratch)
+        bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (37.0, -11.0))
 
     tracemalloc.start()
     before = tracemalloc.get_traced_memory()[0]
-    bin_points(xv, yv, xw, yw, sched, buffers, out, scratch)
+    bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (37.0, -11.0))
     peak = tracemalloc.get_traced_memory()[1] - before
     tracemalloc.stop()
 
@@ -278,10 +296,10 @@ def test_binning_does_not_allocate_more_as_the_sweep_grows():
         xv, yv = _sweep(n=n)
         xw, yw = xv + 37.0, yv - 11.0
         for _ in range(3):
-            bin_points(xv, yv, xw, yw, sched, buffers, out, scratch)
+            bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (37.0, -11.0))
         tracemalloc.start()
         before = tracemalloc.get_traced_memory()[0]
-        bin_points(xv, yv, xw, yw, sched, buffers, out, scratch)
+        bin_points(xw, yw, sched, buffers, out, scratch, 0.0, (37.0, -11.0))
         peaks.append(tracemalloc.get_traced_memory()[1] - before)
         tracemalloc.stop()
 
@@ -304,7 +322,7 @@ def test_the_scratch_refuses_a_sweep_it_was_not_sized_for():
     out = np.zeros(500, np.int64)
 
     with pytest.raises(ValueError, match="max_points_per_frame"):
-        bin_points(xv, yv, xv, yv, sched, buffers, out, scratch)
+        bin_points(xv, yv, sched, buffers, out, scratch)
 
 
 def test_a_non_integer_ring_ratio_is_refused():

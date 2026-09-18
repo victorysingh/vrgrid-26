@@ -92,6 +92,8 @@ import tracemalloc
 import numpy as np
 from vrgrid.gpu.allocators import allocate
 from vrgrid.gpu.kernels import (
+    Z_MAX_CM,
+    Z_MIN_CM,
     measurement_variance_cm2,
     quantise_height,
     quantise_weight,
@@ -266,7 +268,7 @@ def make_candidates(rng, n):
     """
     theta = rng.uniform(-np.pi, np.pi, n)
     r = np.sqrt(rng.uniform(1.0, MAX_RANGE_M ** 2, n))
-    return r * np.cos(theta), r * np.sin(theta), rng.uniform(-2.0, 6.0, n)
+    return r * np.cos(theta), r * np.sin(theta), rng.uniform(Z_MIN_CM / 100.0, Z_MAX_CM / 100.0, n)
 
 
 class _Untimed:
@@ -330,8 +332,9 @@ class Frame:
         x, y, cols = self.sweeps[i % len(self.sweeps)]
         np.add(x, i * self.per_frame_m, out=self.ego)   # untimed: JP's transform
         with ctx("bin"):
-            idx = bin_points(x, y, self.ego, y, self.sched, self.buffers,
-                             self.idx, self.bin_scratch)
+            idx = bin_points(self.ego, y, self.sched, self.buffers,
+                             self.idx, self.bin_scratch, 0.0,
+                             (i * self.per_frame_m, 0.0))
         with ctx("scatter"):
             agg = scatter_sorted(idx, **cols, scratch=h.scratch)
         with ctx("fuse"):
@@ -495,7 +498,8 @@ def run_real(args, sched=None):
     t = Timer(stages=STAGES)
     engine = MapEngine(load(args.schedule) if sched is None else sched,
                        max_points=args.points,
-                       clip_class_ids=args.clip_class_ids, timer=t)
+                       clip_class_ids=args.clip_class_ids, timer=t,
+                       device=getattr(args, "device", "cpu"))
 
     # `total` has to span the WHOLE frame -- perception AND the map -- and the
     # perception half happens inside the generator, during `next()`. Wrapping
@@ -514,7 +518,7 @@ def run_real(args, sched=None):
     frames = iter(iter_pipeline(args.seq, args.frames + 1,
                                 use_patchworkpp=not args.no_patchworkpp, timer=t,
                                 reuse_buffers=True, semantics_source=semantics_source,
-                                frnet=frnet))
+                                frnet=frnet, device=getattr(args, "device", "cpu")))
     n = 0
     while True:
         t0 = time.perf_counter()
@@ -531,6 +535,37 @@ def run_real(args, sched=None):
     if n < 2:
         raise SystemExit(f"sequence {args.seq} yielded {n} frames; need at least 2")
     return t, engine, n - 1
+
+
+def run_free(args):
+    """Whole-frame latency with NO stage timer, for the device path.
+
+    The staged table synchronises the card at every stage boundary so each row
+    is honest -- and that serialises the frame. Unsynchronised, the perception
+    kernels run while Patchwork++ runs on the host, which is the configuration
+    that actually ships. This pass times only the whole frame, same frames.
+    """
+    from vrgrid.run.__main__ import iter_pipeline
+    from vrgrid.run.engine import MapEngine
+
+    t = Timer(stages=("total",))
+    engine = MapEngine(load(args.schedule), max_points=args.points,
+                       clip_class_ids=args.clip_class_ids, device=args.device)
+    frames = iter(iter_pipeline(args.seq, args.frames + 1,
+                                use_patchworkpp=not args.no_patchworkpp,
+                                device=args.device))
+    n = 0
+    while True:
+        t0 = time.perf_counter()
+        frame = next(frames, None)
+        if frame is None:
+            break
+        engine.step(frame)
+        t.record("total", (time.perf_counter() - t0) * 1e3)
+        n += 1
+        if n == 1:
+            t.reset()
+    return t
 
 
 def main() -> None:
@@ -569,6 +604,10 @@ def main() -> None:
                     help="with --seq: also write every frame's whole-frame time "
                          "(ms, startup frame excluded) as JSON, so p99 can be "
                          "pooled across runs instead of taken per run")
+    ap.add_argument("--device", default="cpu", choices=["cpu", "cuda"],
+                    help="--seq only: run scatter and cleanup on the card "
+                         "(src/gpu/device.py). Publish it as a second column, "
+                         "never in place of the CPU one")
     ap.add_argument("--alloc", action="store_true",
                     help="also report transient bytes per frame per stage, for the "
                          "MAPPING BACK END only (separate pass; tracemalloc "
@@ -617,7 +656,7 @@ def main() -> None:
         print(f"numpy {np.__version__}, python {platform.python_version()}, "
               f"{platform.system()}\n")
         print(f"sequence {args.seq}, {frames} frames, schedule {args.schedule}, "
-              f"{engine.handle.allocated_slots:,} slots\n")
+              f"{engine.handle.allocated_slots:,} slots, device {engine.device}\n")
         print_real_table(t)
         if args.frame_times:
             # The raw samples, not a percentile of them: a p99 gate judged over
@@ -626,6 +665,16 @@ def main() -> None:
             pathlib.Path(args.frame_times).write_text(
                 json.dumps([round(float(x), 4) for x in t._samples("total")]),
                 encoding="utf-8")
+        if args.device == "cuda":
+            del engine
+            free = run_free(args)
+            m, h = free.summary()["total"], free.headroom("total")
+            print(f"\nFREE-RUNNING (no per-stage synchronisation; the card and "
+                  f"Patchwork++ overlap):\n  FRAME p50 {m['p50_ms']:.2f} ms  "
+                  f"p99 {m['p99_ms']:.2f} ms  max {m['max_ms']:.2f} ms  -> "
+                  f"{h['fps_p50']:.1f} FPS p50, {h['fps_p99']:.1f} FPS p99, "
+                  + ("meets" if h["meets_sensor_rate"] else "MISSES")
+                  + " 10 Hz at p99")
         return
 
     handle = allocate(sched, with_pyramid=not args.no_pyramid)

@@ -1,0 +1,37 @@
+commit 8815858
+verifying on cuda: 20,000 rows x 64 ch into 4,000 slots (28 empty)
+  scatter_max   forward  max abs diff 0.000e+00 (0.0 ulp), 0 of 254,208 values differ, empty-slot convention matches
+  scatter_mean  forward  max abs diff 2.384e-07 (2.0 ulp), 103,205 of 256,000 values differ, empty-slot convention matches
+  scatter_max   backward max abs diff 0.000e+00
+  scatter_mean  backward max abs diff 2.384e-07 (2.0 ulp on 17,013 of 20,000 rows, the same float32 rounding as the forward)
+  verified: scatter_max exact in both directions, scatter_mean within float32 rounding
+
+fast-scatter ENABLED in frustum_encoder, frnet_backbone (scatter_max) and frustum_encoder (scatter_mean)
+frnet-semantickitti_seg.pth on cuda: 0 missing, 8 unexpected tensors (auxiliary heads are training-only)
+
+sequence 08, 200 frames, 22,741,893 labelled points
+  reductions                torch.scatter_reduce (--fast-scatter)
+  point accuracy             90.3%
+  mIoU over 15 present classes   65.2%   (paper: 73.3% over all 4,071 frames)
+
+  class                IoU     gt points
+  --------------------------------------
+  car               97.9%     1,084,071
+  road              97.4%     5,405,752
+  bicyclist         91.2%        42,226
+  sidewalk          89.2%     3,686,809
+  building          89.1%     1,412,463
+  trunk             79.3%       554,564
+  terrain           73.8%     6,181,325
+  vegetation        70.8%     4,073,074
+  person            69.9%        33,383
+  pole              55.1%        74,733
+  bicycle           48.0%         6,899
+  parking           45.3%        36,453
+  traffic-sign      41.4%        83,161
+  fence             29.3%        66,830
+  other-ground       0.0%           150
+
+  no ground truth in this slice, excluded: motorcycle, truck, other-vehicle, motorcyclist
+
+  §7.1 drivable set only: mIoU 61.1% over 5 classes -- the only ones the map consults

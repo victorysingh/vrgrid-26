@@ -62,7 +62,7 @@ actual slides. This is the target structure to check yours against.
 | 6 | The maths that is load-bearing | law of total variance, `merge(split(c))==c` | all of `sih-math.md` |
 | 7 | **Demo** | live `check`, then baked scenes | a video |
 | 8 | Ghost removal | 13.5% of trail, 4.96 M cells, **429,012 spared** | a rate without the guard number |
-| 9 | **Accuracy** | ρ ≈ 1.45 (1.26–1.59, n=11), per-ring RMSE | one sequence's best number |
+| 9 | **Accuracy** | ρ ≈ 1.39 (1.16–1.53, n=11) at ring 1; ring 0 ρ 1.17 (1.13–1.29) — regenerated 2026-09-17, `known-limitations.md` §2b; per-ring RMSE | one sequence's best number |
 | 10 | Curbs & potholes | ring-0 8.1–9.1 cm on all 11 | any detection *rate* |
 | 11 | Segmentation | 90.3% / **65.2%**, and why it is not in the pipeline | 69.8% |
 | 12 | Latency | p50 89.18 / p99 100.43, budget 100 | p99 rounded down |
@@ -233,7 +233,7 @@ built something together.
 | "08 was our unseen test set" | "07 and 08 were what downloaded first. That's why we re-ran across all eleven and quote the range." |
 | "GPU-accelerated" | "GPU-shaped, CPU reference implementation, every number measured on it" |
 | "We detect potholes" | "We detect pothole-shaped features. There is no ground truth in SemanticKITTI to score a rate against." |
-| "ρ = 1.45" | "ρ ≈ 1.45, range 1.26–1.59, n = 11" |
+| "ρ = 1.39" | "ρ ≈ 1.39, range 1.16–1.53, n = 11" (was 1.45 / 1.26–1.59 before the 17 Sep regeneration) |
 | "8.94 MB" (alone) | "8.94 MB of map, 29.06 total preallocated" |
 | "Real-time at 10 Hz" | "Median 89 ms against a 100 ms budget. p99 is 100.4, so we miss one frame in a hundred by 0.4 ms." |
 | "FRNet didn't work" | "FRNet works at 90.3%. We kept it out of the pipeline so segmentation error doesn't contaminate the mapping result." |

@@ -1,0 +1,11 @@
+NVIDIA GeForce RTX 5050 Laptop GPU, 610.57.04
+verifying on cuda: 20,000 rows x 64 ch into 4,000 slots (28 empty)
+  scatter_max   forward  max abs diff 0.000e+00 (0.0 ulp), 0 of 254,208 values differ, empty-slot convention matches
+  scatter_mean  forward  max abs diff 2.384e-07 (2.0 ulp), 103,376 of 256,000 values differ, empty-slot convention matches
+  scatter_max   backward max abs diff 0.000e+00
+  scatter_mean  backward max abs diff 2.384e-07 (2.0 ulp on 17,013 of 20,000 rows, the same float32 rounding as the forward)
+  verified: scatter_max exact in both directions, scatter_mean within float32 rounding
+
+benchmark on cuda: 124,000 x 256 into 25,000 slots
+  scatter_max   loop     1834.7 ms   shim    1.22 ms       1501x
+  scatter_mean  loop     1693.7 ms   shim    2.89 ms        585x

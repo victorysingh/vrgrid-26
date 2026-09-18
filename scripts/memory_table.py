@@ -11,7 +11,7 @@ changes with it and the report cannot silently disagree with the code.
 from vrgrid.cell import CELL_BYTES
 from vrgrid.grid.schedule import load
 
-# 200 x 200 m footprint, -2 to +6 m vertical extent.
+# 200 x 200 m footprint, 8 m vertical extent (-3.5 to +4.5 m since 2026-09-17).
 FOOTPRINT_M = 200.0
 VERTICAL_M = 8.0
 BASE_CELL_M = 0.05

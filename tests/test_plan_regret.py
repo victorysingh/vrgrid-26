@@ -454,3 +454,27 @@ def test_one_lattice_jog_is_the_smallest_regret_that_can_be_reported():
     assert cell_m == 0.25, "the quantum below is quoted for the frozen 0.25 m"
     one_jog = 2.0 * (np.sqrt(2.0) - 1.0) * cell_m
     assert round(one_jog, 3) == 0.207
+
+
+def test_a_footprint_height_is_weighted_by_area_not_by_returns():
+    """A 25 cm planning cell over a 20 cm map: the cell at x in [20, 40) cm
+    covers one sample column in five. Given ~80x the returns of its neighbour,
+    count weighting made it the planning cell's height (~0.50 m); the
+    reference would say 0.10 m, the area-weighted mean. That leak, alternating
+    where the two lattices beat, was seq 07's uniform 20 cm regret spike
+    (`known-limitations.md` §10)."""
+    from vrgrid.eval.harness import uniform_schedule
+    from vrgrid.eval.plan_regret import costmap_from_gridmap
+    from vrgrid.grid.quantise import quantise_variance_cm2
+
+    gm = build_gridmap(uniform_schedule(0.20, half_width_m=24.0), with_pool=False)
+    buf, soa = gm.buffers[0], gm.soa
+    for ix in range(-3, 4):
+        for iy in range(-3, 4):
+            slot = int(buf.flat_slot(ix, iy))
+            tall = ix == 1
+            soa["ground_height"][slot] = 50 if tall else 0
+            soa["obs_count"][slot] = 250 if tall else 3
+            soa["height_variance"][slot] = quantise_variance_cm2(4.0)
+    cm = costmap_from_gridmap(gm, 0.0, 0.0, 1, 1)
+    assert cm.z_m[0, 0] == pytest.approx(0.10, abs=1e-9)

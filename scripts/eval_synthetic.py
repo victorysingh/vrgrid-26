@@ -20,11 +20,13 @@ for the per-ring table, running the whole chain with no data and no network:
 
 import argparse
 import dataclasses
+import itertools
 import shutil
 import tempfile
 from pathlib import Path
 
 import numpy as np
+from vrgrid.eval import metrics
 from vrgrid.eval.harness import (
     build_gridmap,
     evaluate,
@@ -40,7 +42,7 @@ from vrgrid.eval.plan_regret import (
     regret,
     restrict,
 )
-from vrgrid.eval.reference_map import build_from_scans
+from vrgrid.eval.reference_map import RingObservations, build_from_scans
 from vrgrid.eval.synthetic import read_sequence, write_sequence
 from vrgrid.grid.schedule import load
 from vrgrid.grid.transient import TrackList
@@ -240,7 +242,53 @@ def plan_regret_for(gm, reference, vehicle_xy_m, mask=None,
     rep.n_found = len(found)
     rep.n_blocked = blocked
     rep.regret_sd = float(np.std(finite)) if len(finite) > 1 else 0.0
+    # Per query, in `plan_queries` order -- the same queries for every map, so
+    # two schedules can be compared query by query (`paired_step`). nan where
+    # the query found no path or the regret was infinite.
+    rep.per_query = np.array([r.regret if r.found and np.isfinite(r.regret)
+                              else np.nan for r in results])
     return rep
+
+
+def paired_step(reg_a, reg_b):
+    """(mean of R_b - R_a, its standard error, n) over the queries both maps
+    answered. The schedules are planned on the SAME queries, so the per-query
+    difference cancels how hard each query is -- which the unpaired SEs in the
+    money plot do not, and which is most of their width."""
+    d = reg_b.per_query - reg_a.per_query
+    d = d[np.isfinite(d)]
+    if d.size < 2:
+        return float("nan"), float("nan"), int(d.size)
+    return float(d.mean()), float(d.std(ddof=1) / np.sqrt(d.size)), int(d.size)
+
+
+def regret_se(reg) -> float:
+    """Standard error of the mean regret over the queries that produced a
+    finite regret. `plan_regret_for` attaches `regret_sd` and the counts."""
+    n = getattr(reg, "n_found", 0) - getattr(reg, "n_blocked", 0)
+    sd = getattr(reg, "regret_sd", float("nan"))
+    return sd / np.sqrt(n) if n > 1 else float("nan")
+
+
+def format_observed(gm, observed, result, schedule) -> str:
+    """§9.2 scored twice: against M*, and against only the returns each ring
+    received. The first is the table above; the difference between the two is
+    how much of each ring's error is the cell and the reference averaging
+    DIFFERENT observations rather than the coarsening itself."""
+    rmse = metrics.height_rmse_per_ring(gm, observed)
+    rho = metrics.coarsening_ratio_per_ring(gm, observed)
+    lines = [("  vs M*|ring -- the reference restricted to the returns each ring "
+              "received:"),
+             (f"  {'ring':>4} {'cells':>8} {'RMSE':>8} {'(M*)':>8} {'rho':>6} "
+              f"{'(M*)':>6} {'spread':>7}")]
+    for r in result.rows():
+        L = r["ring"]
+        c = rho[L]
+        f = (lambda v, w, p=2: f"{'--':>{w}}" if v is None or np.isnan(v)
+             else f"{v:>{w}.{p}f}")
+        lines.append(f"  {L:>4} {c['n']:>8,} {f(rmse[L], 8)} {f(r['rmse_cm'], 8)} "
+                     f"{f(c['rho'], 6)} {f(r['rho'], 6)} {f(c['spread_cm'], 7)}")
+    return "\n".join(lines)
 
 
 def main():
@@ -273,7 +321,7 @@ def main():
             # Without it M* averages building facades into the road surface --
             # +139.86 cm of bias on seq 07, against a coarsening error that
             # should be sub-centimetre.
-            reference = build_from_scans(real_scans(args.seq, args.frames))
+            reference = build_from_scans(real_scans(args.seq, args.frames), band=True)
             print(f"reference map:      {reference}\n")
             # ⚑ NOT `(frames - 1) * 2.0`. That is the synthetic car driving
             #   straight down y = 0; a real one turns, and `costmaps_for`'s own
@@ -283,7 +331,7 @@ def main():
         else:
             write_sequence(root, "99", n_frames=args.frames)
             print(f"synthetic sequence: {args.frames} frames in {root}")
-            reference = build_from_scans(read_sequence(root, "99"))
+            reference = build_from_scans(read_sequence(root, "99"), band=True)
             print(f"reference map:      {reference}\n")
             vehicle_x = (args.frames - 1) * 2.0
         schedules = ([load(n) for n in SCHEDULES]
@@ -300,17 +348,19 @@ def main():
                                arrays=gm.allocation.tracks)
             scans = (real_scans(args.seq, args.frames) if args.seq
                      else vehicle_frame_scans(root, "99", args.keep_moving))
-            stats = run_sequence(gm, scans, tracks=tracks)
-            built.append((schedule, gm, evaluate(gm, reference, stats.frames), stats))
+            observed = RingObservations(len(schedule.rings))
+            stats = run_sequence(gm, scans, tracks=tracks, observed=observed)
+            built.append((schedule, gm, evaluate(gm, reference, stats.frames), stats,
+                          observed))
 
         mask = common_support(*[costmaps_for(gm, reference, vehicle_x)[1]
-                                for _, gm, _, _ in built])
+                                for _, gm, _, _, _ in built])
         print(f"common support: {mask.mean():.1%} of the planning window was "
               f"observed by every schedule")
         print()
 
         rows, unrestricted = [], []
-        for schedule, gm, result, stats in built:
+        for schedule, gm, result, stats, observed in built:
             if args.confound:
                 _, mine = costmaps_for(gm, reference, vehicle_x)
                 raw_u = plan_regret_for(gm, reference, vehicle_x)
@@ -326,6 +376,11 @@ def main():
                 rows.append((result, plan_regret_for(gm, reference, vehicle_x, mask)))
                 continue
             print(format_result(result, schedule))
+            between = metrics.coarsening_ratio_per_ring(gm, reference, within_cell=False)
+            print("  rho, spread between 5 cm cells only (conservative): "
+                  + "  ".join(f"r{L} {between[L]['rho']:.2f}" if between[L]["n"] else f"r{L} --"
+                              for L in range(len(schedule.rings))))
+            print(format_observed(gm, observed, result, schedule))
             print(f"  transient: {stats.dynamic_points:,} dynamic returns routed "
                   f"out of the persistent map, {stats.tracks} tracks alive; "
                   f"§9.4 DR={stats.removal['DR']:.2f} SP={stats.removal['SP']:.2f} "
@@ -345,14 +400,26 @@ def main():
         print("§8.2, the money plot: memory on x, plan regret on y.")
         print("  R(S) = J_M*(pi_S) - J_M*(pi*), BOTH paths scored on M*.")
         print(f"  {'schedule':<12} {'MB':>7} {'cells':>10} {'RMSE':>7} {'rho':>6} "
-              f"{'R(S)':>8} {'frechet':>8} {'unknown':>8}")
+              f"{'R(S)':>8} {'+-SE':>6} {'frechet':>8} {'unknown':>8}")
         for r, reg in rows:
             m = memory_vs_regret_row(r, reg)
             blocked = " BLOCKED" if m["blocked_on_reference"] else ""
             print(f"  {m['schedule']:<12} {m['megabytes']:>7.2f} "
                   f"{m['logical_cells']:>10,} {m['worst_ring_rmse_cm']:>6.2f}c "
                   f"{m['mean_rho']:>6.2f} {m['regret']:>8.3f} "
+                  f"{regret_se(reg):>6.3f} "
                   f"{m['frechet_m']:>7.2f}m {m['unknown_fraction']:>7.1%}{blocked}")
+        print("  +-SE is the standard error of R(S) over the planning queries that")
+        print("  found a path.")
+        print()
+        print("  Adjacent steps, PAIRED over the same queries (dR = R_next - R_prev):")
+        for (ra, ga), (rb, gb) in itertools.pairwise(rows):
+            dm, dse, n = paired_step(ga, gb)
+            z = dm / dse if dse and dse > 0 else float("nan")
+            print(f"  {ra.schedule_name:>12} -> {rb.schedule_name:<12} dR {dm:+.3f} "
+                  f"+- {dse:.3f}  ({z:+.1f} SE, n={n})")
+        print("  A step under ~2 SE is query noise at this sequence length, not an")
+        print("  ordering of the two schedules.")
         if unrestricted:
             print()
             print("The confound, unrestricted. Math §8.2, and the note in "

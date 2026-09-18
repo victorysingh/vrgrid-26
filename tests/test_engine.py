@@ -119,8 +119,7 @@ def _run(ghost_removal, present_for=3, total=12, seed=0, elevation_m=0.0):
             # The cells the car itself occupies, taken from the engine's own
             # binning so the test cannot disagree with it about geometry.
             pts = frame.points_sensor
-            idx = engine.bin(pts[n_static:, 0], pts[n_static:, 1],
-                             pts[n_static:, 0], pts[n_static:, 1] )
+            idx = engine.bin(pts[n_static:, 0], pts[n_static:, 1])
             car_slots = np.unique(idx[idx >= 0])
     return engine, car_slots, counters
 
@@ -170,8 +169,7 @@ def test_the_guard_protects_the_wall():
     the wall here is the fence."""
     engine, _, counters = _run(ghost_removal=True, present_for=3, total=12)
 
-    wall_slots = engine.bin(np.array([WALL_X]), np.array([0.0]),
-                            np.array([WALL_X]), np.array([0.0]))
+    wall_slots = engine.bin(np.array([WALL_X]), np.array([0.0]))
     assert wall_slots[0] >= 0
     state = occupancy_state(engine.handle.grid, engine.thresholds)
     assert state[wall_slots[0]] == OCC_OCCUPIED, "the cleanup ate the wall"

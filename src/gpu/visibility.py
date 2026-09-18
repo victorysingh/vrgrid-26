@@ -42,7 +42,8 @@ changed, one was given a new job.
 from dataclasses import dataclass
 
 import numpy as np
-from vrgrid.gpu.kernels import measurement_variance_cm2
+from vrgrid.gpu import compat
+from vrgrid.gpu.kernels import _backend_of, measurement_variance_cm2
 
 NO_RETURN = np.inf  # range-image pixels where the beam came back from nothing
 
@@ -86,24 +87,24 @@ def clear_tolerance_m(range_m, sensor: "Sensor | None" = None, floor_m: float = 
     return np.maximum(3.0 * sigma_m, floor_m)
 
 
-def _delta_into(out, r, t, sensor: Sensor, floor_m: float) -> None:
+def _delta_into(out, r, t, sensor: Sensor, floor_m: float, xp=np) -> None:
     """`clear_tolerance_m` with every intermediate written through an `out=`.
 
     sigma_z^2 = (h/r)^2 sigma_r^2 + r^2 sigma_phi^2, eq (12) at normal
     incidence. Done in metres throughout -- the cm round trip in
     `measurement_variance_cm2` cancels exactly (sqrt(v*1e4)/100 == sqrt(v)).
     """
-    sigma_phi = np.radians(sensor.sigma_phi_deg)
-    np.maximum(r, 1e-3, out=t)
-    np.divide(sensor.height_m, t, out=t)
-    np.multiply(t, t, out=t)
-    np.multiply(t, sensor.sigma_r_m ** 2, out=t)      # near-field floor term
-    np.multiply(r, r, out=out)
-    np.multiply(out, sigma_phi ** 2, out=out)          # the r^2 term, dominant
-    np.add(out, t, out=out)
-    np.sqrt(out, out=out)
-    np.multiply(out, 3.0, out=out)
-    np.maximum(out, floor_m, out=out)
+    sigma_phi = np.radians(sensor.sigma_phi_deg)      # a python float either way
+    xp.maximum(r, 1e-3, out=t)
+    xp.divide(sensor.height_m, t, out=t)
+    xp.multiply(t, t, out=t)
+    xp.multiply(t, sensor.sigma_r_m ** 2, out=t)      # near-field floor term
+    xp.multiply(r, r, out=out)
+    xp.multiply(out, sigma_phi ** 2, out=out)          # the r^2 term, dominant
+    xp.add(out, t, out=out)
+    xp.sqrt(out, out=out)
+    xp.multiply(out, 3.0, out=out)
+    xp.maximum(out, floor_m, out=out)
 
 
 def spherical_project(x_m, y_m, z_m, shape, sensor: "Sensor | None" = None, xp=np,
@@ -200,7 +201,7 @@ class CleanupResult:
         return self.protected / would_clear if would_clear else 0.0
 
 
-def new_visibility_scratch(max_cells: int, range_dtype=np.float64) -> dict:
+def new_visibility_scratch(max_cells: int, range_dtype=np.float64, xp=np) -> dict:
     """Preallocated working set, sized by candidate cells. Same contract as the
     scatter scratch: pass it every frame, never grow it inside the loop.
 
@@ -225,17 +226,17 @@ def new_visibility_scratch(max_cells: int, range_dtype=np.float64) -> dict:
     f64 = ("dz", "r", "t1", "t2", "delta")
     i32 = ("u", "v")
     b = ("in_view", "mask", "see_through", "guard")
-    s = {name: np.zeros(max_cells, np.float64) for name in f64}
-    s["observed"] = np.zeros(max_cells, dt)
-    s.update({name: np.zeros(max_cells, np.int32) for name in i32})
+    s = {name: xp.zeros(max_cells, np.float64) for name in f64}
+    s["observed"] = xp.zeros(max_cells, dt)
+    s.update({name: xp.zeros(max_cells, np.int32) for name in i32})
     # `flat` is intp, not int32, and the gather below asks for mode="clip".
     # Measured at 200,000 cells: intp + clip allocates 1 KB a frame, intp +
     # the default "raise" allocates 1.6 MB, and int32 + "raise" allocates 3.2
     # MB -- numpy copies the index array to bounds-check it, and copies it
     # again to widen it. The indices are already clamped in view, so "clip"
     # removes a check that cannot fire.
-    s["flat"] = np.zeros(max_cells, np.intp)
-    s.update({name: np.zeros(max_cells, np.bool_) for name in b})
+    s["flat"] = xp.zeros(max_cells, np.intp)
+    s.update({name: xp.zeros(max_cells, np.bool_) for name in b})
     return s
 
 
@@ -252,14 +253,19 @@ def visibility_cleanup(x_m, y_m, z_m, range_image, has_return_now=None,
     received a return in this scan, which `scatter()` already knows.
     """
     sensor = sensor or HDL64E
-    n = len(np.asarray(x_m))
+    # The scratch decides the backend, exactly as in gpu/kernels.py: it is the
+    # thing that had to be allocated on the right device, so the two can never
+    # disagree and no caller signature changes. Without one there is nothing to
+    # disagree with and the private scratch is numpy.
+    xp = _backend_of(scratch["u"]) if scratch is not None else np
+    n = len(xp.asarray(x_m))
 
     # The image width is part of the scratch's shape, not something to convert
     # per frame -- see new_visibility_scratch. Without a scratch there is
     # nothing to disagree with, so the private one is sized to the image.
-    range_image = np.asarray(range_image)
+    range_image = xp.asarray(range_image)
     if scratch is None:
-        scratch = new_visibility_scratch(max(n, 1), range_image.dtype)
+        scratch = new_visibility_scratch(max(n, 1), range_image.dtype, xp=xp)
     elif range_image.dtype != scratch["observed"].dtype:
         raise ValueError(
             f"range image is {range_image.dtype} but this scratch gathers into "
@@ -274,7 +280,7 @@ def visibility_cleanup(x_m, y_m, z_m, range_image, has_return_now=None,
         return CleanupResult(scratch["see_through"][:0], 0, 0, 0, 0)
 
     u, v, r, in_view = spherical_project(x_m, y_m, z_m, range_image.shape,
-                                         sensor, scratch=scratch)
+                                         sensor, xp=xp, scratch=scratch)
     observed, delta = scratch["observed"][:n], scratch["delta"][:n]
     out, t1, flat = scratch["see_through"][:n], scratch["t1"][:n], scratch["flat"][:n]
 
@@ -282,11 +288,14 @@ def visibility_cleanup(x_m, y_m, z_m, range_image, has_return_now=None,
     # fresh array every frame; so, more quietly, would np.take with int32
     # indices or the default bounds-checking mode -- see new_visibility_scratch.
     width = range_image.shape[1]
-    np.multiply(v, width, out=flat)
-    np.add(flat, u, out=flat)
-    np.take(range_image.reshape(-1), flat, out=observed, mode="clip")
+    xp.multiply(v, width, out=flat)
+    xp.add(flat, u, out=flat)
+    # `flat` is built from u and v, which spherical_project clamps into the
+    # image, so the clip never actually clips -- see compat.take_clip on why
+    # that invariant is the caller's to hold on device.
+    compat.take_clip(xp, range_image.reshape(-1), flat, out=observed)
 
-    _delta_into(delta, r, t1, sensor, floor_m)
+    _delta_into(delta, r, t1, sensor, floor_m, xp=xp)
 
     # (32): the beam returned from beyond the cell, so it passed through it.
     # A pixel with no return proves nothing -- the beam may have been absorbed,
@@ -294,23 +303,23 @@ def visibility_cleanup(x_m, y_m, z_m, range_image, has_return_now=None,
     # Comparing against inf would clear the entire map, which is the failure
     # mode this comment exists to prevent.
     mask = scratch["mask"][:n]
-    np.add(r, delta, out=delta)
-    np.greater(observed, delta, out=out)
-    np.logical_and(out, in_view, out=out)
-    np.isfinite(observed, out=mask)
-    np.logical_and(out, mask, out=out)
+    xp.add(r, delta, out=delta)
+    xp.greater(observed, delta, out=out)
+    xp.logical_and(out, in_view, out=out)
+    xp.isfinite(observed, out=mask)
+    xp.logical_and(out, mask, out=out)
 
     out_of_view = n - int(in_view.sum())
     protected = 0
     if protect_current_returns and has_return_now is not None:
         guard = scratch["guard"][:n]
-        np.copyto(guard, np.asarray(has_return_now, dtype=bool))
-        np.logical_and(out, guard, out=mask)
-        protected = int(np.count_nonzero(mask))
-        np.logical_not(guard, out=guard)
-        np.logical_and(out, guard, out=out)
+        xp.copyto(guard, xp.asarray(has_return_now, dtype=bool))
+        xp.logical_and(out, guard, out=mask)
+        protected = int(xp.count_nonzero(mask))
+        xp.logical_not(guard, out=guard)
+        xp.logical_and(out, guard, out=out)
 
-    return CleanupResult(out, n, out_of_view, protected, int(np.count_nonzero(out)))
+    return CleanupResult(out, n, out_of_view, protected, int(xp.count_nonzero(out)))
 
 
 def apply_miss(log_odds: np.ndarray, cells: np.ndarray, see_through: np.ndarray,

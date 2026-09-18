@@ -556,3 +556,174 @@ def test_allocated_cells_exceed_the_annulus_count():
     uniform = (200.0 / C0) ** 2
     assert uniform / buffer_cells(s) == pytest.approx(17.6, abs=0.1)
     assert uniform / s.total_cells == pytest.approx(21.5, abs=0.1)
+
+
+# --- the partition under foveation: open item D2 / R3 -------------------------
+
+
+def _adversarial_speeds(s, eps_m=1e-7):
+    """Speeds that put a stretched boundary just either side of a lattice line.
+
+    `a_f` and `a_s` are continuous in speed, so the boundary R_L * a(v) lands
+    wherever it lands; the dangerous speeds are the ones where it lands ON the
+    coarser lattice, and a uniform sweep essentially never samples those. So
+    they are solved for from the schedule: R_L * a_f(v) = m * c_{L+1} +- eps,
+    and the same for the lateral squeeze. Plus v = 0 (eq. 20 collapses to
+    Chebyshev), mid-range, and past the a_f = 2 clamp.
+    """
+    a = s.anisotropy
+    speeds = {0.0, 0.5 * a.v_ref_ms, a.v_ref_ms / a.kappa_forward, 1.5 * a.v_ref_ms}
+    for L in range(len(s.rings) - 1):
+        R, c = s.rings[L].half_width_m, s.rings[L + 1].cell_m
+        for frac in (0.37, 0.81):                       # a_f in (1, 2)
+            m = math.floor(R * (1.0 + frac) / c)
+            for e in (-eps_m, eps_m):
+                t = ((m * c + e) / R - 1.0) / a.kappa_forward
+                speeds.add(t * a.v_ref_ms)
+        for frac in (0.13, 0.42):                       # a_s in (0.5, 1)
+            m = math.floor(R * (1.0 - frac) / c)
+            for e in (-eps_m, eps_m):
+                t = (R / (m * c + e) - 1.0) / a.kappa_side
+                speeds.add(t * a.v_ref_ms)
+    return sorted(v for v in speeds if v >= 0.0)
+
+
+def _boundary_blocks(s, vehicle, yaw, speed, handle):
+    """Base-cell centres of every coarsest block near a ring boundary.
+
+    Returns (x, y) vehicle-relative, shape (blocks, K*K), where K is the
+    coarsest ring's k and the second axis runs over the block's base cells
+    in (row, col) order. Exhaustive over the window would be 19 M cells per
+    case; a split can only go wrong at a boundary BETWEEN two rings, so every
+    block within 0.6 m of one is taken -- more than a coarsest block plus the
+    block bound's half-extent, so no straddling block is missed. The map's
+    outer edge has no finer ring on the far side; what it must not do, drop a
+    return, is `test_every_return_inside_the_map_is_binned`.
+    """
+    c0 = s.base_cell_m
+    top = len(s.rings) - 1
+    K = s.k(top)
+    buf = _centred_windows(handle, s, *vehicle)[top]
+    bi = np.arange(buf.x0, buf.x0 + buf.side)
+    bx, by = np.meshgrid(bi, np.arange(buf.y0, buf.y0 + buf.side), indexing="xy")
+    bx, by = bx.reshape(-1), by.reshape(-1)
+    cx = (bx + 0.5) * K * c0 - vehicle[0]
+    cy = (by + 0.5) * K * c0 - vehicle[1]
+
+    # near a window edge (world axes) or a stretched boundary (heading frame)
+    cheb = np.maximum(np.abs(cx), np.abs(cy))
+    u = math.cos(yaw) * cx + math.sin(yaw) * cy
+    v = math.cos(yaw) * cy - math.sin(yaw) * cx
+    from vrgrid.grid.lattice import d_aniso
+    d = d_aniso(u, v, s, speed)
+    radii = np.array([r.half_width_m for r in s.rings[:-1]])
+    near = ((np.abs(cheb[:, None] - radii[None, :]).min(1) < 0.6)
+            | (np.abs(d[:, None] - radii[None, :]).min(1) < 0.6))
+    bx, by = bx[near], by[near]
+
+    ly, lx = np.divmod(np.arange(K * K), K)
+    fx = bx[:, None] * K + lx[None, :]
+    fy = by[:, None] * K + ly[None, :]
+    return (fx + 0.5) * c0 - vehicle[0], (fy + 0.5) * c0 - vehicle[1], lx, ly
+
+
+def _centred_windows(handle, s, vx, vy):
+    from vrgrid.gpu.shift import RingBuffer
+
+    bufs = []
+    for r in handle.rings:
+        k = s.k(r.ring)
+        i, j = i_ring(vx, C0, k), i_ring(vy, C0, k)
+        bufs.append(RingBuffer(side=r.side, offset=r.offset,
+                               x0=i - r.side // 2, y0=j - r.side // 2))
+    return bufs
+
+
+def _assert_partition(s, ring, lx, ly, where):
+    """Every ring-L block that holds a ring-L cell holds nothing else.
+
+    That one statement is both halves of a partition: no footprint contains
+    another (a ring-L cell's block has no finer cell in it) and there is no
+    gap (no base cell in it went unassigned). `ring` is (blocks, K*K) over
+    base cells; a ring-L block is the group of base cells sharing
+    (lx // k_L, ly // k_L), because k_L divides K.
+    """
+    assert not (ring == OUTSIDE).any(), f"{where}: a place inside the map has no ring"
+    for L in range(1, len(s.rings)):
+        kL = s.k(L)
+        group = (ly // kL) * (s.k(len(s.rings) - 1) // kL) + lx // kL
+        for g in np.unique(group):
+            cells = ring[:, group == g]
+            has_L = (cells == L).any(axis=1)
+            whole = (cells == L).all(axis=1)
+            bad = int((has_L & ~whole).sum())
+            assert bad == 0, (
+                f"{where}: {bad} ring-{L} blocks share their footprint with "
+                f"another ring's cells -- the partition is broken"
+            )
+
+
+@pytest.mark.partition
+@pytest.mark.parametrize("schedule_name", SCHEDULES)
+def test_no_cell_footprint_contains_another_under_foveation(schedule_name):
+    """CI-blocking. Open item D2 / R3: for every pair of cells at two ring
+    levels, neither footprint contains the other, and nothing is left
+    unclaimed -- at every speed, from v = 0 through the a_f clamp, including
+    the speeds that put a stretched boundary exactly on a lattice line, and at
+    headings that are not multiples of 90 degrees.
+
+    ⚑ It failed before the fix. With the per-point rule, blocks straddling a
+      stretched boundary were split between two rings; on real seq 08 the
+      engine did it every frame, 0.108% of coarse cells. Checked against the
+      old `ring_of` on the vehicle-at-origin, yaw-0 cases, which it accepts.
+    """
+    from vrgrid.gpu.allocators import allocate
+    from vrgrid.grid.schedule import load_thresholds
+
+    s = load(schedule_name)
+    handle = allocate(s, load_thresholds(), commit_pages=False)
+    cases = [((0.0, 0.0), 0.0), ((37.03, -11.12), 0.0),
+             ((37.03, -11.12), 0.7853981633974483), ((-4.21, 250.4), 2.9),
+             ((0.013, 0.021), -1.2)]
+    for speed in _adversarial_speeds(s):
+        for vehicle, yaw in cases:
+            x, y, lx, ly = _boundary_blocks(s, vehicle, yaw, speed, handle)
+            bufs = _centred_windows(handle, s, *vehicle)
+            ring = ring_of(x.reshape(-1), y.reshape(-1), s, speed, vehicle, yaw,
+                           bufs).reshape(x.shape)
+            _assert_partition(s, ring, lx, ly,
+                              f"{schedule_name} v={speed:.9f} at {vehicle} yaw {yaw}")
+
+
+@pytest.mark.partition
+@pytest.mark.parametrize("schedule_name", SCHEDULES)
+def test_every_return_inside_the_map_is_binned(schedule_name):
+    """The dual of containment: a point the coarsest window holds is never
+    dropped. The per-point rule chose a ring from the rotated sensor frame
+    and then missed that ring's world-aligned window, losing 0.224% of the
+    returns on real seq 08. Now a block only descends into a window that holds
+    all of it, so `bin_points` returns -1 exactly for points past the map."""
+    from vrgrid.gpu.allocators import allocate
+    from vrgrid.grid.lattice import bin_points, new_bin_scratch
+    from vrgrid.grid.schedule import load_thresholds
+
+    s = load(schedule_name)
+    handle = allocate(s, load_thresholds(), commit_pages=False)
+    rng = np.random.default_rng(SEED + 11)
+    n = 200_000
+    xv, yv = rng.uniform(-110, 110, n), rng.uniform(-110, 110, n)
+    scratch = new_bin_scratch(n, s)
+    out = np.zeros(n, np.int64)
+    top = len(s.rings) - 1
+    for vehicle, yaw in [((0.0, 0.0), 0.0), ((37.03, -11.12), 0.7853981633974483),
+                         ((-4.21, 250.4), 2.9)]:
+        bufs = _centred_windows(handle, s, *vehicle)
+        xw, yw = xv + vehicle[0], yv + vehicle[1]
+        for speed in (0.0, 15.0):
+            idx = bin_points(xw, yw, s, bufs, out, scratch, speed, vehicle, yaw)
+            k, b = s.k(top), bufs[top]
+            ix, iy = i_ring(xw, C0, k) - b.x0, i_ring(yw, C0, k) - b.y0
+            inside = (ix >= 0) & (ix < b.side) & (iy >= 0) & (iy < b.side)
+            assert np.array_equal(idx >= 0, inside), (
+                f"{int((inside & (idx < 0)).sum())} returns inside the map dropped "
+                f"at {vehicle} yaw {yaw} v={speed}")

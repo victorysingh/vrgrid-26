@@ -1,0 +1,14 @@
+sequence 08, 200 frames after 10 warm-up, schedule 5/10/20/40, eval-harness map with refinement pool, traversability on cuda (15 s wall)
+
+  stage             p50 ms   p99 ms   max ms     n
+  split_merge         8.50    18.17    22.22   200
+  traversability      4.78     6.31     6.55   200
+  pyramid             2.80     3.74     3.78   200
+
+  refinement pool per frame (p50 / max):  fired 4104/4923  acquired 141/522  released 5/115  refused 3492/4125
+  totals over 200 frames: fired 813,631, acquired 31,000, released 2,803, refused 683,812
+  pool occupancy at the end: 512/512 blocks
+
+  pyramid memory: 2.73 MB nodes + 0.38 MB scratch
+
+  Not in `MapEngine`'s frame loop: add to its FRAME row only if the pool and pyramid are enabled in the deployed pipeline.

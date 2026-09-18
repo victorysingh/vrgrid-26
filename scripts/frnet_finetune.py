@@ -33,6 +33,7 @@ can actually resume.
   reproduce the other behaviour rather than to hide it.
 """
 import argparse
+import os
 import random
 import sys
 import time
@@ -176,7 +177,9 @@ def main() -> int:
     ap.add_argument("--weight-classes", default="terrain,vegetation",
                     help="comma-separated classes to upweight; empty for none")
     ap.add_argument("--weight", type=float, default=3.0)
-    ap.add_argument("--init", default="checkpoints/frnet-semantickitti_seg.pth",
+    ap.add_argument("--init",
+                    default=os.environ.get("VRGRID_FRNET_CHECKPOINT",
+                                           "checkpoints/frnet-semantickitti_seg.pth"),
                     help="checkpoint to start from -- pass a tuned one to CONTINUE it")
     ap.add_argument("--resume", action="store_true",
                     help="also restore optimiser state and step count from --init, "

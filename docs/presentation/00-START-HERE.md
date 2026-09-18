@@ -22,6 +22,7 @@ is pushed. Read this file first; it is the map to the other five.*
 | **`08-JP-BRIEF.md`** | JP's scope, lines, questions and tonight's checklist. | JP |
 | **`09-GPU-WHAT-TO-SAY.md`** | Every GPU claim: intended vs. what to say. Speakable. | Whoever presents slide 3 |
 | **`10-DL-WHAT-TO-SAY.md`** | Same, for the segmentation model. Mostly material you aren't using. | JP |
+| **`11-DLSS-DUALITY.md`** | The DLSS analogy, with the six claims its source PDF could not support removed. | Whoever pitches the framing |
 
 ---
 
@@ -83,7 +84,7 @@ favour.** Read `01-CRITICAL-FIXES.md` §2 before you say anything about it.
 | 1 | **8.94 MB** | the *map* — 745,000 cells × 12 B | the 29.06 MB total |
 | 2 | **29.06 MB** | *total preallocated*, map + every frame-path buffer | the 8.94 MB map |
 | 3 | **21.5× / 286×** | cell-count ratios vs uniform 5 cm 2.5D (192 MB) and dense 5 cm 3D (2.56 GB) | any ratio taken against 29.06 |
-| 4 | **ρ ≈ 1.45**, range 1.26–1.59, n = 11, ring 1 | the coarsening-justification ratio: what coarsening cost, divided by what the terrain's own roughness cost | RMSE, which spans 5.3× because roads differ |
+| 4 | **ρ ≈ 1.39**, range 1.16–1.53, n = 11, ring 1 (between-cell spread); **1.25** [1.11–1.33] with within-cell variance, which also gives ring 0 a ρ of **1.17** [1.13–1.29] — regenerated 2026-09-17, `known-limitations.md` §2b. *Was 1.45 [1.26–1.59].* | the coarsening-justification ratio: what coarsening cost, divided by what the terrain's own roughness cost | RMSE, which spans 6.0× because roads differ (5.3× before 17 Sep) |
 | 5 | **p50 89.18 ms / p99 100.43 ms** | end-to-end frame, 200 frames of seq 08 | the 80.78/97.72 in the handover, which is the back half only |
 | 6 | **90.3% point acc / 65.2% mIoU** | FRNet on 200 frames of seq 08 | **69.8%**, which is an arithmetic error still on your slides |
 

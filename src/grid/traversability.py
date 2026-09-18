@@ -199,8 +199,103 @@ def border_mask(side: int) -> np.ndarray:
     return m.reshape(-1)
 
 
+_PLANS = {}
+
+
+def _plan(side: int, cell_m: float, th) -> dict:
+    """Everything `bitfield` needs that does not depend on the map, built once
+    per (ring window, thresholds) and reused every frame.
+
+    Two lookup tables replace the two most expensive per-cell operations, and
+    they are exact because they are built from the same functions:
+      * roughness: `dequantise_variance_cm2(code) * 1e-4 > sigma2_max` over all
+        256 codes -- was an `exp` over every cell of every ring every frame;
+      * class: `isin(candidate, drivable_ids)` over all 256 packed class bytes
+        -- was a sort-based `isin` over every cell.
+    """
+    t = th["traversability"]
+    key = (side, float(cell_m), t.get("baseline_m"), t["theta_max_deg"], t["s_max_m"],
+           t["sigma2_max_m2"], t["n_min"], t["h_vehicle_m"], tuple(t["drivable_classes"]))
+    plan = _PLANS.get(key)
+    if plan is None:
+        baseline_m = t.get("baseline_m")
+        k = baseline_k(cell_m, baseline_m)
+        ip, im, span_cells = _stencil(side, k)
+        byte = np.arange(256)
+        plan = {
+            "ip": ip, "im": im,
+            "den_x": (span_cells * cell_m)[None, :],
+            "den_y": (span_cells * cell_m)[:, None],
+            "k": k,
+            "border": border_mask(side),
+            "tan": np.tan(np.radians(t["theta_max_deg"])),
+            "step_cm": t["s_max_m"] * 100.0,
+            "h_cm": t["h_vehicle_m"] * 100.0,
+            "n_min": t["n_min"],
+            "rough": dequantise_variance_cm2(byte.astype(np.uint8)) * 1e-4 > t["sigma2_max_m2"],
+            "nondrivable": ~np.isin(unpack_class(byte.astype(np.uint8))[0].astype(np.int32),
+                                    drivable_ids(th)),
+        }
+        _PLANS[key] = plan
+    return plan
+
+
 def bitfield(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
     """The six bits, for one ring. Math §7.1. Returns uint8, 0 = traversable.
+
+    `ring_slice` is the ring's span in the flat arrays and `side` its window
+    extent, so this works against either storage layout as long as the caller
+    knows the shape of what it is passing.
+
+    Every threshold comes from `configs/thresholds.yaml`; nothing here is
+    inline, because these are frozen before schedules are compared and a
+    constant living in the source cannot be frozen (flaw E6).
+
+    The same predicate as `bitfield_reference`, bit for bit, at a fraction of
+    the cost: per-ring constants and two lookup tables come from `_plan`, and
+    the geometric terms use the same float operations in the same order, and each bit is OR-ed
+    in place under its mask (a boolean-indexed `out[mask] |= bit` is a gather
+    and a scatter per bit, and was most of the remaining cost). It
+    was 37 ms a frame over the four rings of 5/10/20/40 on real seq 08, most of
+    it an `exp` and an `isin` over 910,000 cells.
+    """
+    th = thresholds if thresholds is not None else load_thresholds()
+    P = _plan(side, cell_m, th)
+    ip, im = P["ip"], P["im"]
+
+    ground = soa["ground_height"][ring_slice].astype(np.int32)
+    n = soa["obs_count"][ring_slice]
+
+    out = np.zeros(ground.size, dtype=np.uint8)
+    np.bitwise_or(out, TRAV_CLEARANCE, out=out, where=(soa["ceiling_height"][ring_slice].astype(np.int32) - ground) < P["h_cm"])
+
+    seen = (n >= 1).reshape(side, side)
+    geometric = (seen & seen[:, ip] & seen[:, im] & seen[ip, :] & seen[im, :]).reshape(-1)
+
+    z = ground.astype(np.float64).reshape(side, side) / 100.0
+    dzdx = (z[:, ip] - z[:, im]) / P["den_x"]
+    dzdy = (z[ip, :] - z[im, :]) / P["den_y"]
+    slope = np.hypot(dzdx.reshape(-1), dzdy.reshape(-1))
+    np.bitwise_or(out, TRAV_SLOPE, out=out, where=geometric & (slope > P["tan"]))
+
+    zi = ground.reshape(side, side)
+    step = np.abs(zi[:, ip] - zi)
+    np.maximum(step, np.abs(zi[:, im] - zi), out=step)
+    np.maximum(step, np.abs(zi[ip, :] - zi), out=step)
+    np.maximum(step, np.abs(zi[im, :] - zi), out=step)
+    np.bitwise_or(out, TRAV_STEP, out=out, where=geometric & (step.reshape(-1) > P["step_cm"]))
+
+    np.bitwise_or(out, TRAV_ROUGHNESS, out=out, where=P["rough"][soa["height_variance"][ring_slice]])
+    np.bitwise_or(out, TRAV_CLASS, out=out, where=P["nondrivable"][soa["semantic_class"][ring_slice]])
+    np.bitwise_or(out, TRAV_CONFIDENCE, out=out, where=(n < P["n_min"]) | P["border"])
+    return out
+
+
+def bitfield_reference(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
+    """The six bits, for one ring, written the direct way. Math §7.1.
+
+    The reference `bitfield` is pinned against
+    (`test_bitfield_matches_the_reference`). Returns uint8, 0 = traversable.
 
     `ring_slice` is the ring's span in the flat arrays and `side` its window
     extent, so this works against either storage layout as long as the caller
@@ -281,13 +376,20 @@ def bitfield(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
     return out
 
 
-def update(soa, schedule, rings, thresholds=None) -> None:
+def update(soa, schedule, rings, thresholds=None, device: str = "cpu") -> None:
     """Recompute the bitfield for every ring, in place into `soa`.
+
+    `device="cuda"` computes it on the card (`gpu.traversability_device`) and
+    writes the identical bits back; the default stays on the host.
 
     `rings` is a sequence of (slice, side) -- from `gpu.allocators.RingLayout`
     or `lattice.ring_slice`/`ring_extent`, whichever the caller allocated with.
     """
     th = thresholds if thresholds is not None else load_thresholds()
+    if device == "cuda":
+        from vrgrid.gpu.traversability_device import update as device_update
+        device_update(soa, schedule, rings, th)
+        return
     for level, (sl, side) in enumerate(rings):
         soa["traversability"][sl] = bitfield(
             soa, sl, side, schedule.rings[level].cell_m, th)

@@ -22,7 +22,7 @@ cannot express. A filter allowed to drive σ² to zero also locks: `K = 0` and
 the cell stops responding to evidence. §3.3 adds process noise for the same
 reason; this is the storage-side floor of the same argument.
 
-**The ceiling is the vertical extent, (8 m)².** The map spans −2 to +6 m, so a
+**The ceiling is the vertical extent, (8 m)².** The map spans an 8 m band (−3.5 to +4.5 m about the datum since 2026-09-17), so a
 cell with no information has a height uncertainty of that order. Beyond it
 there is nothing to distinguish.
 
@@ -47,7 +47,7 @@ import numpy as np
 # §3.4. Nothing the map stores can be more certain than the step it stores in.
 SIGMA2_MIN_CM2 = 1.0 / 12.0
 
-# (8 m)^2 in cm^2: the -2..+6 m vertical extent, i.e. total ignorance about a
+# (8 m)^2 in cm^2: the 8 m vertical extent (-3.5..+4.5 m about the datum), i.e. total ignorance about a
 # height that is nonetheless known to be inside the map.
 SIGMA2_MAX_CM2 = 800.0**2
 

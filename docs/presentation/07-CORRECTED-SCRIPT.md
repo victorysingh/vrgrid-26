@@ -243,11 +243,11 @@ labelled SemanticKITTI sequences**, not just the two we developed on."
 
 ⚑ "Map footprint fixed at 8.94 megabytes throughout. Our coarsening ratio — how
 much the compression cost, divided by the terrain's own natural sub-cell spread —
-comes out at a **median of about 1.45, range 1.26 to 1.59, across eleven
-sequences** at ring 1. That's the number that matters, because raw RMSE across
-those same eleven varies by a factor of 5.3 — it tracks how rough each road
+comes out at a **median of about 1.39, range 1.16 to 1.53, across eleven
+sequences** at ring 1 *(regenerated 17 Sep; was 1.45, 1.26–1.59)*. That's the number that matters, because raw RMSE across
+those same eleven varies by a factor of 6.0 *(5.3 before the 17 Sep regeneration)* — it tracks how rough each road
 happens to be. Rho divides that out and leaves what the *coarsening* cost, and it
-varies by only 1.26. A rho near one means the coarsening cost about what the
+varies by only 1.32×. A rho near one means the coarsening cost about what the
 terrain's own variability already did.
 
 ⚑ And we'll say this before you check: sequences 07 and 08, the two we developed

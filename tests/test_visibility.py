@@ -383,3 +383,83 @@ def test_columns_match_jp_projection():
     assert won.sum() > n // 2, "too few winning returns to be a real comparison"
     assert np.array_equal(np.asarray(u)[won], jp_u[won])
     assert np.array_equal(np.asarray(v)[won], jp_v[won])
+
+
+# --- visibility_cleanup on device -------------------------------------------
+# The prize stage of the port order: 29% of the frame and embarrassingly
+# parallel, every cell an independent range-image gather. The contract is the
+# same as scatter_sorted's -- not "it runs on a GPU" but "it returns the same
+# bytes", because eq (32) decides what gets erased from the map.
+
+
+def _cupy_or_skip():
+    """See tests/test_gpu_compat.py for why all three states are handled."""
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        pytest.skip(f"cupy unavailable: {exc}")
+    try:
+        cp.zeros(1) + 1
+    except Exception as exc:                                      # noqa: BLE001
+        pytest.skip(f"cupy present but no usable device: {type(exc).__name__}")
+    return cp
+
+
+def _cleanup_case(n=50_000, shape=(64, 2048), seed=17):
+    rng = np.random.default_rng(seed)
+    img = rng.uniform(3.0, 80.0, shape)
+    # NO_RETURN pixels are the failure mode the guard exists for: comparing
+    # against inf would clear the whole map, so they must survive the port.
+    img[rng.random(shape) < 0.15] = np.inf
+    return (rng.uniform(-80, 80, n), rng.uniform(-80, 80, n),
+            rng.uniform(-3, 4, n), img, rng.random(n) < 0.20)
+
+
+def test_visibility_cleanup_on_device_is_bit_identical_to_cpu():
+    cp = _cupy_or_skip()
+    x, y, z, img, hrn = _cleanup_case()
+    n = len(x)
+
+    cpu = visibility_cleanup(x, y, z, img, hrn,
+                             scratch=new_visibility_scratch(n, img.dtype, xp=np))
+    dev = [cp.asarray(a) for a in (x, y, z, img, hrn)]
+    gpu = visibility_cleanup(*dev,
+                             scratch=new_visibility_scratch(n, img.dtype, xp=cp))
+
+    assert cpu.cleared > 0 and cpu.protected > 0 and cpu.out_of_view > 0, (
+        "case is degenerate: it must exercise clearing, the guard and the "
+        "out-of-view path or it proves nothing")
+    for f in ("tested", "out_of_view", "protected", "cleared"):
+        assert getattr(cpu, f) == getattr(gpu, f), f"{f} differs on device"
+    assert np.array_equal(cpu.see_through, cp.asnumpy(gpu.see_through))
+
+
+def test_visibility_cleanup_never_clears_on_a_no_return_pixel_on_device():
+    """The guard that eq (32) rests on, re-checked on the device path.
+
+    A pixel with no return proves nothing -- the beam may have been absorbed,
+    hit glass or gone to the sky. An all-NO_RETURN image must therefore clear
+    exactly nothing; comparing against inf instead would erase the map.
+    """
+    cp = _cupy_or_skip()
+    x, y, z, _, hrn = _cleanup_case(n=5_000)
+    blind = np.full((64, 2048), np.inf)
+    dev = [cp.asarray(a) for a in (x, y, z, blind, hrn)]
+    res = visibility_cleanup(*dev,
+                             scratch=new_visibility_scratch(len(x), blind.dtype, xp=cp))
+    assert res.cleared == 0
+
+
+def test_visibility_cleanup_is_reproducible_on_device():
+    cp = _cupy_or_skip()
+    x, y, z, img, hrn = _cleanup_case(n=80_000, seed=5)
+    dev = [cp.asarray(a) for a in (x, y, z, img, hrn)]
+    scratch = new_visibility_scratch(len(x), img.dtype, xp=cp)
+    first = None
+    for run in range(10):
+        res = visibility_cleanup(*dev, scratch=scratch)
+        cp.cuda.Stream.null.synchronize()
+        got = cp.asnumpy(res.see_through).tobytes()
+        if first is None:
+            first = got
+        assert got == first, f"visibility_cleanup diverged on device at run {run}"

@@ -11,6 +11,13 @@ belongs somewhere else:
     cleanup  gpu.visibility.visibility_cleanup + apply_miss
     shift    gpu.shift.shift, tracking the vehicle
 
+**`device="cuda"` moves the map onto the card.** The grid lives in device
+memory and every stage above runs there as a CUDA kernel
+(`gpu.device.DeviceMap`), in the same order, and must produce the same map
+hash as the CPU engine after every frame -- `scripts/gpu_parity.py` checks it
+on real data. `handle.grid` then becomes a `MirroredGrid`: a read-only host
+copy refreshed on first read after each frame, so every readout keeps working.
+
 **Why this exists: the ghost toggle has to drive the map, not the point cloud.**
 `dashboard/pipeline_view.py` splits the moving returns into a `world/ghosts`
 entity and toggling it hides them. That is a filter on the input, and it
@@ -23,15 +30,26 @@ what the "off" half of the Gate 3 demo is supposed to show.
 Everything is preallocated in `__init__`. The frame loop allocates nothing.
 """
 
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 
 import numpy as np
 from vrgrid.cell import OCC_OCCUPIED
 from vrgrid.gpu.allocators import allocate, resolve_candidate_cap
+from vrgrid.gpu.attrition import codes as attrition_codes
+from vrgrid.gpu.attrition import counts as attrition_counts
+from vrgrid.gpu.device import (
+    DeviceFrame,
+    DeviceMap,
+    MirroredGrid,
+    resolve_device,
+    synced_stage,
+)
 from vrgrid.gpu.kernels import (
     CEILING_NONE,
     measurement_variance_cm2,
+    out_of_band,
     quantise_height,
     quantise_weight,
     scatter_sorted,
@@ -76,6 +94,9 @@ class StepCounters:
     protected: int           # would have cleared; had a return this scan
     out_of_view: int
     truncated: int = 0       # occupied cells DROPPED by max_candidate_cells
+    # Per-stage return counts (`gpu.attrition`), when the engine was built with
+    # attrition=True; None otherwise.
+    attrition: dict | None = None
 
     @property
     def protected_fraction(self) -> float:
@@ -109,8 +130,13 @@ class MapEngine:
     def __init__(self, schedule, thresholds=None, max_points: int = 150_000,
                  max_candidates: int | None = None, ghost_removal: bool = True,
                  sensor: Sensor | None = None, clip_class_ids: bool = False,
-                 timer=None):
+                 timer=None, device: str = "cpu", attrition: bool = False):
         self.sched = schedule
+        # Opt-in: counting stages costs a few full-length masks per frame, and
+        # the default frame loop allocates nothing it does not need.
+        self.attrition = attrition
+        self._attr = None
+        self.device = resolve_device(device)
         self.thresholds = thresholds if thresholds is not None else load_thresholds()
         if max_candidates is not None:
             # An explicit cap overrides the config, but it has to reach
@@ -176,6 +202,7 @@ class MapEngine:
         cap = self.max_candidates
         self._cand = {n: np.zeros(cap, np.float64) for n in "xyz"}
         self._cand_slots = np.zeros(cap, np.int64)
+        self._vehicle_xy, self._yaw = (0.0, 0.0), 0.0
         self._has_return = np.zeros(cap, np.bool_)
         # Membership table for the cleanup guard, one byte per slot -- the same
         # size and the same lifetime as `occ_state` above, and allocated here for
@@ -198,22 +225,56 @@ class MapEngine:
         self._ring_bounds = np.array([r.offset for r in rings]
                                      + [rings[-1].offset + rings[-1].slots], np.int64)
 
+        # The card. Built from the host allocation above, so the device grid
+        # starts in exactly the state `allocate()` put the host one in, and
+        # sized from the same caps, so both configurations refuse the same
+        # inputs. The host allocation stays: it is what `report()` and every
+        # memory figure describe, and it becomes the read-only mirror.
+        self.gpu = None
+        if self.device == "cuda":
+            self.gpu = DeviceMap(self)
+            self.handle.grid = MirroredGrid(self.handle.grid, self.gpu.grid)
+
     # -- binning ------------------------------------------------------------
 
-    def bin(self, xs, ys, xw, yw):
-        """Points -> flat slots.
+    def bin(self, xw, yw, vehicle_xy_m=None, yaw_rad=None):
+        """World points -> flat slots.
 
-        **Two frames, and mixing them is the whole difficulty.** Ring
-        MEMBERSHIP is a question about distance from the sensor, so `ring_of`
-        takes the sensor/vehicle-frame point (§6.1). The lattice INDEX is
-        global -- the map does not move when the vehicle does -- so `i_ring`
-        takes the world-frame one (§2.1). Feed world coordinates to `ring_of`
-        and every point reads as OUTSIDE once the vehicle has driven past the
-        last ring's half-width; feed vehicle coordinates to `i_ring` and the
-        map slides along under the vehicle. Both look right for a few seconds.
+        Ring membership is decided per world-lattice block against the ring
+        windows (`lattice.ring_of`, open item D2), so the points go in once, in
+        the world frame, and the vehicle comes in as its position and heading.
+        Both default to the vehicle as of the last `step()` -- the windows are
+        the ones that step shifted, so binning against anything else would
+        name slots the map never wrote.
         """
-        return bin_points(xs, ys, xw, yw, self.sched, self.buffers,
-                          self.idx, self.bin_scratch)
+        if vehicle_xy_m is None:
+            vehicle_xy_m = self._vehicle_xy
+        if yaw_rad is None:
+            yaw_rad = self._yaw
+        return bin_points(xw, yw, self.sched, self.buffers, self.idx,
+                          self.bin_scratch, 0.0, vehicle_xy_m, yaw_rad)
+
+    def attrition_codes(self) -> np.ndarray:
+        """Terminal pipeline stage per return of the LAST frame, as host uint8
+        (`gpu.attrition` codes), for a map colouring. Needs attrition=True, and
+        must be read before the next `step()` overwrites the frame buffers."""
+        if self._attr is None:
+            raise RuntimeError("build the engine with attrition=True and step it first")
+        c = attrition_codes(*self._attr)
+        return c.get() if hasattr(c, "get") else c
+
+    def _set_vehicle(self, frame, ego):
+        """Vehicle position and heading for this frame's ring decision.
+
+        Heading is the yaw of the sensor's x axis in the world, read off the
+        pose rotation. It only says which way is forward for §6.2 -- the rings
+        themselves are world-aligned windows -- so a frame with no pose (the
+        synthetic scenes) faces +x, which is what they were built for.
+        """
+        self._vehicle_xy = (float(ego[0]), float(ego[1]))
+        pose = getattr(frame, "pose", None)
+        self._yaw = (0.0 if pose is None
+                     else math.atan2(float(pose[1][0]), float(pose[0][0])))
 
     # -- the inverse, for the cleanup ---------------------------------------
 
@@ -343,6 +404,8 @@ class MapEngine:
     def step(self, frame) -> StepCounters:
         """Fold one `PerceptionFrame` into the map. See the module docstring
         for the stage order; everything here is bookkeeping around it."""
+        if self.gpu is not None:
+            return self._step_device(frame)
         stage = (self.timer.stage if self.timer is not None
                  else (lambda _name: nullcontext()))
         pts = frame.points_sensor
@@ -357,7 +420,8 @@ class MapEngine:
             self._track_vehicle(ego[:2])
             self._track_datum(ego[2])
         with stage("bin"):
-            idx = self.bin(xs, ys, world[:, 0], world[:, 1])
+            self._set_vehicle(frame, ego)
+            idx = self.bin(world[:, 0], world[:, 1])
 
         semantic = np.asarray(frame.semantic)[:n]
         cls = np.where(semantic < 0, 0, semantic).astype(np.uint8)
@@ -376,10 +440,13 @@ class MapEngine:
 
         rng_m = np.sqrt(xs * xs + ys * ys + (zs) * (zs))
         with stage("scatter"):
+            w_q = quantise_weight(measurement_variance_cm2(np.maximum(rng_m, 1e-3)))
+            # a clamped height is not a measurement (`kernels.out_of_band`)
+            w_q[out_of_band(world[:, 2], self.z_datum)] = 0
             aggregate = scatter_sorted(
                 idx,
                 quantise_height(world[:, 2], self.z_datum),
-                quantise_weight(measurement_variance_cm2(np.maximum(rng_m, 1e-3))),
+                w_q,
                 np.asarray(frame.reflectivity8)[:n].astype(np.uint8),
                 cls,
                 np.asarray(frame.ground)[:n].astype(bool),
@@ -393,9 +460,77 @@ class MapEngine:
             index=frame.index, points=len(pts), binned=int((idx >= 0).sum()),
             cells_touched=len(touched), occupied=0, tested=0, cleared=0,
             protected=0, out_of_view=0)
+        if self.attrition:
+            ground = np.asarray(frame.ground)[:n].astype(bool)
+            self._attr = (len(pts), idx, ground, w_q)
+            counters.attrition = attrition_counts(len(pts), idx, ground, w_q,
+                                                  np.asarray(frame.moving),
+                                                  np.asarray(frame.inverse_index))
         if self.ghost_removal:
             with stage("cleanup"):
                 self._cleanup(frame, touched, ego, counters)
+        return counters
+
+    def _step_device(self, frame) -> StepCounters:
+        """`step`, with the grid and every stage on the card. Same order, same
+        counters; the only host work is the ring-window bookkeeping."""
+        gpu = self.gpu
+        stage = synced_stage(self.timer)
+        n_all = len(frame.points_sensor)
+        n = min(n_all, self.max_points)
+        ego = np.asarray(frame.vehicle_xyz_world, float)
+        if self._origin is None:
+            self._origin = ego[:2].copy()
+
+        cls_host = None
+        if isinstance(frame, DeviceFrame):
+            if frame._p.max_class > CLASS_MAX and not self.clip_class_ids:
+                raise ValueError(f"semantic class {frame._p.max_class} exceeds the "
+                                 f"{CLASS_MAX} that fusion's 5-bit candidate holds "
+                                 "(math §10.2)")
+        else:
+            semantic = np.asarray(frame.semantic)[:n]
+            cls_host = np.where(semantic < 0, 0, semantic).astype(np.uint8)
+            if not class_ids_fit(cls_host):
+                if not self.clip_class_ids:
+                    raise ValueError(
+                        f"semantic class {int(cls_host.max())} exceeds the {CLASS_MAX} "
+                        "that fusion's 5-bit candidate holds (math §10.2)")
+                np.clip(cls_host, 0, CLASS_MAX, out=cls_host)
+
+        with stage("shift"):
+            d = gpu.inputs(frame, n, cls_host)
+            self._track_vehicle(ego[:2])
+            self._track_datum(ego[2])
+        with stage("bin"):
+            self._set_vehicle(frame, ego)
+            idx = gpu.bin(d, n, self.buffers, self._vehicle_xy, self._yaw)
+        with stage("scatter"):
+            aggregate = gpu.scatter(d, n, idx, self.z_datum)
+        with stage("fuse"):
+            gpu.fuse(aggregate)
+
+        counters = StepCounters(
+            index=frame.index, points=n_all,
+            binned=int(gpu.cp.count_nonzero(idx >= 0)),
+            cells_touched=len(aggregate), occupied=0, tested=0, cleared=0,
+            protected=0, out_of_view=0)
+        if self.attrition:
+            w_q = gpu.w_q[:n]
+            self._attr = (n_all, idx, d["ground"], w_q)
+            if isinstance(frame, DeviceFrame):
+                moving, inverse = frame._p.moving[:n_all], frame._p.inverse
+            else:
+                moving, inverse = np.asarray(frame.moving), np.asarray(frame.inverse_index)
+            counters.attrition = attrition_counts(n_all, idx, d["ground"], w_q, moving, inverse)
+        if self.ghost_removal:
+            with stage("cleanup"):
+                gpu.cleanup(aggregate.cells, ego, self.z_datum, self.handle.rings,
+                            self.buffers, d["range"], self.sensor,
+                            self.thresholds["visibility"]["range_tolerance_m"],
+                            counters)
+        gpu.synchronize()
+        self.handle.grid.mark_dirty()
         return counters
 
     def _track_vehicle(self, ego_xy):
@@ -407,7 +542,10 @@ class MapEngine:
             want_y = int(np.floor(ego_xy[1] / layout.cell_m)) - buf.side // 2
             dx, dy = want_x - buf.x0, want_y - buf.y0
             if dx or dy:
-                shift(buf, dx, dy, self.handle.grid)
+                if self.gpu is None:
+                    shift(buf, dx, dy, self.handle.grid)
+                else:
+                    self.gpu.clear(shift(buf, dx, dy))
 
     @property
     def z_datum(self) -> float:
@@ -426,6 +564,9 @@ class MapEngine:
         implementation, both callers -- two spellings of a re-basing rule is
         how the map and the reference come to disagree about what a height is.
         """
+        if self.gpu is not None:
+            self._z_datum = self.gpu.track_datum(self._z_datum, ego_z)
+            return
         self._z_datum = track_datum(self.handle.grid, self._z_datum, ego_z)
 
     def _cleanup(self, frame, touched, ego, counters):
@@ -495,6 +636,11 @@ class MapEngine:
         counters.out_of_view = result.out_of_view
 
     # -- readout ------------------------------------------------------------
+
+    def device_bytes(self) -> dict | None:
+        """Card-side memory for a device run, pool used and reserved both;
+        None on CPU. See `gpu.device.DeviceMap.device_bytes`."""
+        return self.gpu.device_bytes() if self.gpu is not None else None
 
     def occupied_slots(self) -> np.ndarray:
         """Flat slots the map currently calls OCCUPIED. What a 2.5D map view

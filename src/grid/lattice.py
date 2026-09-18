@@ -19,6 +19,8 @@ prevent: 0.2 is not representable in binary, the two lattices drift apart, and
 near a boundary a point falls in both cells or neither.
 """
 
+import math
+
 import numpy as np
 from vrgrid.cell import CELL_FIELDS, alloc_soa
 from vrgrid.gpu.allocators import EMPTY_CELL
@@ -108,78 +110,169 @@ def i_ring(x: float, base_cell_m: float, k: int) -> int:
     return i_fine(x, base_cell_m) // int(k)
 
 
-def ring_of(x: float, y: float, schedule, speed_ms: float = 0.0) -> int:
-    """Which ring a point falls in, after anisotropic stretch (master v4 §3.2).
+def _ring_windows(schedule, vehicle_xy_m=(0.0, 0.0), buffers=None):
+    """(k, side, x0, y0) per ring: the window each ring's cells live in.
 
-    Anisotropy changes ring MEMBERSHIP only. Every cell stays on the same base
-    5 cm lattice, so nesting and alignment are untouched -- say this explicitly
-    in the report, because it looks like it should break alignment.
-
-    Math §6.1 eq. (18) with the scaled L-infinity norm of §6.2 eq. (20):
-
-        L = min { L : d_aniso(x, y) < R_L }
-
-    Returns OUTSIDE (-1) beyond the last ring. Callers must check: an
-    out-of-map point is not ring 0, and silently clamping it there is how a
-    100 m return ends up written into a 5 cm cell at the origin.
-
-    ⚑ CONTAINMENT, and it constrains §6.2 more than the section admits. Ring L
-    is a fixed square buffer of half-width R_L, so a point may only be assigned
-    to a ring that physically contains it. Equation (20) is free to push a
-    point OUTWARD to a coarser ring -- coarser rings are larger, so the result
-    still fits -- but it cannot pull one inward past its geometric ring. At
-    15 m/s the forward stretch a_f = 2 maps a return 58 m ahead to d = 29 and
-    would file it under ring 2, whose buffer stops at 50 m; the index then
-    wraps toroidally onto a cell on the far side of the map.
-
-    So the lateral squeeze survives contact with fixed buffers and the forward
-    stretch does not. Buying back the forward half means allocating each ring
-    for its maximum stretch (a_f <= 2, so ~1.5x the cells), which is a memory
-    decision, not a lattice one. Anisotropy is stretch item 12 and this is why
-    it is last on the list.
-
-    Scalar in -> int out; ndarray in -> int64 array out, so per-frame ring
-    migration runs over a whole scan without a Python loop.
+    From `buffers` when the caller has them -- the engine, `GridMap`, anything
+    whose windows have actually been shifted -- because ring membership is
+    decided against the windows that EXIST, not the ones that ought to. With
+    no buffers, the windows `recenter()` would build around `vehicle_xy_m`:
+    each ring's own lattice index of the vehicle, minus half a side. That is
+    the stationary map every unit test uses, and at the origin it reproduces
+    eq. (18) exactly -- ring 0's window spans [-10, 10) m.
     """
-    radii = np.array([r.half_width_m for r in schedule.rings], dtype=np.float64)
-    x_a, y_a = np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
+    c0 = schedule.base_cell_m
+    wins = []
+    for L in range(len(schedule.rings)):
+        k = schedule.k(L)
+        if buffers is not None:
+            b = buffers[L]
+            wins.append((k, int(b.side), int(b.x0), int(b.y0)))
+        else:
+            W = ring_extent(schedule, L)
+            wins.append((k, W,
+                         i_ring(float(vehicle_xy_m[0]), c0, k) - W // 2,
+                         i_ring(float(vehicle_xy_m[1]), c0, k) - W // 2))
+    return wins
 
-    # First ring whose half-width strictly exceeds the distance. searchsorted
-    # with side="right" returns len(radii) for a point past the last ring.
-    d = d_aniso(x, y, schedule, speed_ms)
-    chebyshev = np.maximum(np.abs(x_a), np.abs(y_a))          # eq. (18), unstretched
-    ring_aniso = np.searchsorted(radii, d, side="right")
-    ring_geom = np.searchsorted(radii, chebyshev, side="right")
 
-    # The containment rule above: never finer than geometry allows.
-    ring = np.maximum(ring_aniso, ring_geom)
+def _descent_constants(schedule, ks, speed_ms, vehicle_xy_m, yaw_rad):
+    """Per-frame scalars for the block bound: the §6.2 stretch factors, the
+    heading, and per ring (centre offset x, centre offset y, half-extent).
 
-    # Hard rear floor (§6.2): never coarser than rear_floor_cell_m within 50 m
-    # behind. Closing traffic is exactly where a coarse cell hurts, so the
-    # stretch is taken from the sides, never from the back.
-    #
-    # Applied only where the point fits in the floor ring, for the same reason.
-    # §6.2 states the condition as "x < 0 and |x| < 50", which a point at
-    # (-10, -70) satisfies -- behind the vehicle, within 50 m longitudinally,
-    # 70 m to the side -- and forcing that into ring 2 wraps it onto the cell
-    # at +30 m, on the far side of the vehicle.
+    The half-extent is how far a block of side c reaches along a unit
+    direction at angle yaw: (|cos| + |sin|) c / 2. At yaw = 0 that is c / 2,
+    and the bound below is the exact nearest point of the block.
+    """
+    a_f, a_s, a_r = stretch_factors(schedule, speed_ms)
+    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+    c0 = schedule.base_cell_m
+    vx, vy = float(vehicle_xy_m[0]), float(vehicle_xy_m[1])
+    per = []
+    for k in ks:
+        cell = k * c0
+        per.append((0.5 * cell - vx, 0.5 * cell - vy,
+                    0.5 * (abs(cy) + abs(sy)) * cell))
+    return a_f, a_s, a_r, cy, sy, per
+
+
+def ring_of(x, y, schedule, speed_ms: float = 0.0, vehicle_xy_m=(0.0, 0.0),
+            yaw_rad: float = 0.0, buffers=None):
+    """Which ring a place belongs to. Math §6.1 eq. (18), §6.2 eq. (20).
+
+    `x`, `y` are metres from the vehicle along the WORLD axes -- the frame
+    `query()` takes, and `x + vehicle_xy_m` is the world point. `yaw_rad` is
+    the heading, and is used only to say which way is forward for §6.2.
+
+    **The rule is decided per BLOCK, coarse to fine, never per point.**
+
+        L = N-1, or OUTSIDE if the ring N-1 window does not hold the point
+        while L > 0:
+            B = the ring-L block containing the point
+            split B into ring L-1 iff
+                (i)  every ring-(L-1) child of B lies in ring L-1's window, and
+                (ii) d_aniso at the NEAREST point of B is < R_{L-1}
+                     (or §6.2's rear floor forces it)
+            otherwise stop at L
+
+    ⚑ Why per block, and it is the partition theorem, not taste (open item
+      D2 / R3). The previous rule compared each POINT's own d_aniso against
+      R_L. A ring boundary is a real number, and in the engine it was also
+      rotated with the sensor, so it fell strictly inside blocks: two points
+      in one 40 cm cell could be filed 5 cm and 40 cm, and the 40 cm cell's
+      footprint then contained a 5 cm cell that was also occupied. Measured on
+      real seq 08, 30 frames: every frame, 0.108% of coarse cells. Here every
+      decision is a function of the block alone, and blocks nest (validate()
+      guarantees integer ratios), so all points of one block stop at the same
+      level -- no footprint can contain another, and every base cell has
+      exactly one ring, so there is no gap either.
+
+    ⚑ Why the WINDOW decides containment. Each ring is a fixed square buffer on
+      the world lattice (§2.4). The old containment test was the point's
+      Chebyshev distance in the sensor frame, which is a rotated square; its
+      corners are outside the world-aligned window, and a point there was
+      given ring L, missed ring L's window in `bin_points`, and was dropped --
+      0.224% of all returns on seq 08. Testing the block against the integer
+      window is exact, it cannot wrap toroidally, and it cannot drop a return
+      a coarser ring has room for.
+
+    ⚑ Nearest point, not centre (R3 part A). A block admitted to the finer
+      ring if ANY of it belongs there is the safe direction: resolve finely
+      when in doubt. d_aniso is a max of three terms, each monotone along its
+      own heading-frame axis, and the heading-frame extent of a block of side
+      c about its centre is +-(|cos|+|sin|) c/2, so max(term(centre -+ h), 0)
+      bounds each term from below over the whole block. That is a lower bound
+      on d, exact when yaw = 0, and -- the property the partition needs --
+      a function of the block only.
+
+    R3's part B, snapping the boundary to the coarser lattice, is not used:
+    under a heading the boundary is not axis-aligned and no snap puts it on
+    the lattice, while the per-block decision makes the partition hold without
+    it.
+
+    What survives unchanged from before: the lateral squeeze sends side blocks
+    coarser sooner; the forward stretch cannot pull a block past the finer
+    ring's buffer (condition i -- a memory decision, not a lattice one); the
+    rear floor holds within 50 m behind wherever the block fits; the map keeps
+    what the coarsest window holds whatever the speed; and a point past the
+    last window is OUTSIDE, never ring 0.
+
+    Scalar in -> int out; ndarray in -> int64 array out.
+    """
+    c0 = schedule.base_cell_m
+    vx, vy = float(vehicle_xy_m[0]), float(vehicle_xy_m[1])
+    xw = np.asarray(x, dtype=np.float64) + vx
+    yw = np.asarray(y, dtype=np.float64) + vy
+    fx = np.asarray(xw // c0).astype(np.int64)
+    fy = np.asarray(yw // c0).astype(np.int64)
+
+    wins = _ring_windows(schedule, (vx, vy), buffers)
+    ks = [w[0] for w in wins]
+    a_f, a_s, a_r, cy, sy, per = _descent_constants(schedule, ks, speed_ms,
+                                                    (vx, vy), yaw_rad)
+    radii = [r.half_width_m for r in schedule.rings]
     floor_ring = _rear_floor_ring(schedule)
-    if floor_ring is not None:
-        rear = (x_a < 0.0) & (np.abs(x_a) < REAR_FLOOR_RANGE_M)
-        ring = np.where(rear & (ring_geom <= floor_ring),
-                        np.minimum(ring, floor_ring), ring)
+    n = len(wins)
 
-    # A point that physically fits stays in the map even when the stretched
-    # norm overflows past the last ring: at 15 m/s the squeeze sends (0, 70)
-    # to d = 105, and dropping a return ring 3 has a cell for is pure loss.
-    # Otherwise the map's lateral reach would silently shrink from 100 m to
-    # 66.7 m as the vehicle speeds up.
-    ring = np.minimum(ring, len(radii) - 1)
-    ring = np.where(ring_geom >= len(radii), OUTSIDE, ring)
-    return int(ring) if np.ndim(ring) == 0 else ring.astype(np.int64)
+    k, W, x0, y0 = wins[-1]
+    tx, ty = fx // k - x0, fy // k - y0
+    level = np.where((tx >= 0) & (tx < W) & (ty >= 0) & (ty < W), n - 1, OUTSIDE)
+
+    for M in range(n - 1, 0, -1):
+        kM = ks[M]
+        kP, WP, x0P, y0P = wins[M - 1]
+        r = kM // kP
+        bx, by = fx // kM, fy // kM
+
+        # (i) every child in the finer window: [bx*r, bx*r + r) within [x0, x0+W)
+        tx, ty = bx * r - x0P, by * r - y0P
+        fits = (tx >= 0) & (tx <= WP - r) & (ty >= 0) & (ty <= WP - r)
+
+        # (ii) eq. (20) at the block's nearest point, in the heading frame
+        offx, offy, h = per[M]
+        xc = np.asarray(bx * kM).astype(np.float64) * c0 + offx
+        yc = np.asarray(by * kM).astype(np.float64) * c0 + offy
+        u = cy * xc + sy * yc
+        v = cy * yc - sy * xc
+        fwd = np.maximum(u - h, 0.0) / a_f
+        rear = np.maximum(-(u + h), 0.0) / a_r
+        side = np.maximum(np.abs(v) - h, 0.0) / a_s
+        admit = np.maximum(np.maximum(fwd, rear), side) < radii[M - 1]
+
+        # §6.2's rear floor: never coarser than rear_floor_cell_m within 50 m
+        # behind. Closing traffic is where a coarse cell hurts, so the stretch
+        # is taken from the sides, never the back -- and only where the block
+        # fits, which (i) already requires.
+        if floor_ring is not None and M > floor_ring:
+            admit = admit | ((u < 0.0) & (np.abs(u) < REAR_FLOOR_RANGE_M))
+
+        level = np.where((level == M) & fits & admit, M - 1, level)
+
+    return int(level) if np.ndim(level) == 0 else level.astype(np.int64)
 
 
-def migrate_ring(x, y, schedule, current_ring, speed_ms: float = 0.0):
+def migrate_ring(x, y, schedule, current_ring, speed_ms: float = 0.0,
+                 vehicle_xy_m=(0.0, 0.0), yaw_rad: float = 0.0, buffers=None):
     """Ring assignment WITH hysteresis, for per-frame migration. Math §6.3.
 
     A cell sitting exactly on a ring boundary while speed fluctuates would
@@ -192,24 +285,62 @@ def migrate_ring(x, y, schedule, current_ring, speed_ms: float = 0.0):
 
     Between the two the cell stays where it is. `ring_of` is the eps = 0 case
     and is the right function for a fresh point with no history; this one is
-    for a cell that already has a ring.
+    for a cell that already has a ring. `x`, `y`, the vehicle position,
+    heading and windows mean what they mean in `ring_of`, and are passed
+    straight through to it.
     """
+    where = {"vehicle_xy_m": vehicle_xy_m, "yaw_rad": yaw_rad, "buffers": buffers}
     eps = schedule.hysteresis_eps
     d = d_aniso(x, y, schedule, speed_ms)
     radii = [r.half_width_m for r in schedule.rings]
     cur = int(current_ring)
 
     if cur == OUTSIDE:
-        return ring_of(x, y, schedule, speed_ms)
+        return ring_of(x, y, schedule, speed_ms, **where)
 
     # Coarser only once past the OUTER edge of the current ring, widened by
     # eps. Finer as soon as the inner boundary is genuinely crossed.
     if d > radii[cur] * (1.0 + eps):
-        target = ring_of(x, y, schedule, speed_ms)
+        target = ring_of(x, y, schedule, speed_ms, **where)
         return target if target == OUTSIDE else max(target, cur + 1)
     if cur > 0 and d < radii[cur - 1]:
-        return ring_of(x, y, schedule, speed_ms)
+        return ring_of(x, y, schedule, speed_ms, **where)
     return cur
+
+
+
+def migrate_ring_many(x, y, schedule, current_ring, speed_ms: float = 0.0,
+                      vehicle_xy_m=(0.0, 0.0), yaw_rad: float = 0.0, buffers=None):
+    """`migrate_ring` over arrays of cells, element for element identical.
+
+    The refinement pool asks this for every block it holds, every frame -- up
+    to 512 scalar calls, each rebuilding `ring_of`'s windows and constants,
+    which was a measurable share of `gate.apply`. The branches of the scalar
+    version become masks; `ring_of` is evaluated once over all cells, which
+    gives the same per-cell answer because it is elementwise.
+    `test_migrate_ring_many_matches_the_scalar` pins the equivalence.
+    """
+    where = {"vehicle_xy_m": vehicle_xy_m, "yaw_rad": yaw_rad, "buffers": buffers}
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    cur = np.asarray(current_ring, dtype=np.int64)
+    if x.size == 0:
+        return np.zeros(0, dtype=np.int64)
+    eps = schedule.hysteresis_eps
+    d = np.atleast_1d(d_aniso(x, y, schedule, speed_ms))
+    radii = np.array([r.half_width_m for r in schedule.rings], dtype=np.float64)
+    target = np.atleast_1d(ring_of(x, y, schedule, speed_ms, **where)).astype(np.int64)
+
+    outside = cur == OUTSIDE
+    safe = np.where(outside, 0, cur)
+    coarser = ~outside & (d > radii[safe] * (1.0 + eps))
+    finer = ~outside & ~coarser & (safe > 0) & (d < radii[np.maximum(safe - 1, 0)])
+    out = cur.copy()
+    out[outside] = target[outside]
+    out[finer] = target[finer]
+    up = np.where(target == OUTSIDE, OUTSIDE, np.maximum(target, cur + 1))
+    out[coarser] = up[coarser]
+    return out
 
 
 # --- the frame path: zero-allocation binning, math §2.1 + §6.1 --------------
@@ -256,34 +387,40 @@ def new_bin_scratch(max_points: int, schedule) -> dict:
     """Working set for `bin_points`, sized at startup like every other
     frame-path buffer.
 
-    Five int64 lanes, one float64 and two bool: **50 B per point**, 7.50 MB at
+    Six int64 lanes, four float64 and four bool: **84 B per point**, 12.6 MB at
     the 150,000-point cap in
-    `configs/thresholds.yaml: scatter.max_points_per_frame`. Of that, 3.75 MB
-    is the `new_slot_scratch` the frame loop already allocates and which this
-    replaces, so the new declared footprint is 3.75 MB.
+    `configs/thresholds.yaml: scatter.max_points_per_frame`. It was 50 B
+    before the per-block ring rule (open item D2): deciding a block needs its
+    centre in the heading frame -- two more float lanes -- and the rear floor
+    needs a third mask.
 
-    That is the trade, stated plainly: ~4 MB of declared startup footprint to
-    remove 6.96 MB of undeclared per-frame churn. It is the trade
-    `scatter_sorted` already made, and it is the right way round -- churn is
-    invisible until someone profiles it, footprint is a number on a slide.
+    That is the trade, stated plainly: declared startup footprint to remove
+    per-frame churn, which `ring_of` would otherwise allocate at ~15 MB a
+    sweep. Churn is invisible until someone profiles it; footprint is a number
+    on a slide. It is not part of the map's cell budget.
 
-    The lanes are reused aggressively and the comments in `bin_points` say
-    where, because five buffers doing eleven jobs is only safe if the handover
-    points are written down. The caller's `out` array is used as a sixth lane
-    until the final write, for the same reason.
+    The lanes are reused aggressively and the comments in `ring_of_into` and
+    `bin_points` say where, because fourteen buffers doing more jobs than that
+    is only safe if the handover points are written down. The caller's `out`
+    array is used as one more lane until the final write, for the same reason.
     """
     radii, ks, floor_ring = _bin_geometry(schedule)
     n_rings = len(schedule.rings)
     return {
-        "f0": np.zeros(max_points, np.float64),   # d_aniso temp, then xw/yw scaling
-        "f1": np.zeros(max_points, np.float64),   # cheb, then d_aniso
+        "f0": np.zeros(max_points, np.float64),   # base index, block centre x, fwd
+        "f1": np.zeros(max_points, np.float64),   # block centre y, rear
+        "f2": np.zeros(max_points, np.float64),   # u, the heading-frame forward
+        "f3": np.zeros(max_points, np.float64),   # v, then side
         "level": np.zeros(max_points, np.int64),  # ring per point, whole pass
-        "a": np.zeros(max_points, np.int64),      # clipped ring, then gathers
-        "b": np.zeros(max_points, np.int64),      # k, then side
-        "c": np.zeros(max_points, np.int64),      # ix, then col
-        "d": np.zeros(max_points, np.int64),      # iy, then row, then the slot
+        "a": np.zeros(max_points, np.int64),      # block ix, then clipped ring
+        "b": np.zeros(max_points, np.int64),      # block iy, then k, then side
+        "c": np.zeros(max_points, np.int64),      # base ix, then col
+        "d": np.zeros(max_points, np.int64),      # base iy, then row, then slot
+        "e": np.zeros(max_points, np.int64),      # window offsets, block corner
         "live": np.zeros(max_points, np.bool_),
         "tmp": np.zeros(max_points, np.bool_),
+        "aux": np.zeros(max_points, np.bool_),
+        "aux2": np.zeros(max_points, np.bool_),
         # per-ring tables, gathered per point. x0/y0 move with the vehicle
         # every frame, so they are refilled per call -- into these arrays,
         # never rebuilt.
@@ -300,25 +437,6 @@ def new_bin_scratch(max_points: int, schedule) -> dict:
         "floor_ring": floor_ring,
         "max_points": int(max_points),
     }
-
-
-def _count_at_or_below(values, radii, out, mask) -> None:
-    """`np.searchsorted(radii, values, side="right")` without the allocation.
-
-    searchsorted has no `out=`, and it runs twice per frame over a full-length
-    array -- 1.92 MB at 120,000 points. Its result is the count of radii that
-    are `<= v`, so over four rings a branch-free accumulate is allocation-free
-    and, at this length, no slower than a binary search per element.
-    """
-    out[:] = 0
-    for r in radii:
-        np.greater_equal(values, r, out=mask)
-        # `np.add(out, mask, out=out)` reads more naturally and costs 64 kB a
-        # call: adding a bool array to an int64 one is a mixed-dtype ufunc, so
-        # numpy casts through its fixed internal buffer. Bounded rather than
-        # per-point, but it is the last allocation on this path. A masked
-        # scalar increment does the same arithmetic with no cast at all.
-        np.add(out, 1, out=out, where=mask)
 
 
 def d_aniso_into(x, y, schedule, speed_ms, out, tmp):
@@ -343,49 +461,128 @@ def d_aniso_into(x, y, schedule, speed_ms, out, tmp):
     return out
 
 
-def ring_of_into(x, y, schedule, speed_ms, out, scratch):
-    """`ring_of` over a whole sweep, allocation-free. Math §6.1 eq. (18).
+def ring_of_into(xw, yw, schedule, speed_ms, out, scratch, buffers=None,
+                 vehicle_xy_m=(0.0, 0.0), yaw_rad: float = 0.0):
+    """`ring_of` over a whole sweep, allocation-free. Math §6.1, §6.2.
 
-    `x`, `y` are VEHICLE frame -- ring membership is a question about distance
-    from the sensor. `out` is int64 and receives OUTSIDE (-1) beyond the last
-    ring, exactly as the reference does; callers must check it.
+    ⚑ `xw`, `yw` are WORLD coordinates, unlike `ring_of`'s vehicle-relative
+      ones: the frame path has world points in hand, and ring membership is
+      now a property of the world-lattice block, so the vehicle position
+      enters only through `vehicle_xy_m`. `ring_of(xw - vx, yw - vy, ...,
+      vehicle_xy_m=(vx, vy))` is the same question, bit for bit -- pinned by
+      `test_ring_of_into_matches_ring_of`.
 
-    Every rule the reference applies is applied here, in the same order and for
-    the same reason: containment (never finer than geometry allows), the rear
-    floor (§6.2, and only where the point fits in the floor ring), and the
-    keep-what-fits clamp. `ring_of`'s docstring is the one that explains why
-    each exists; this is the one that runs.
+    `out` is int64 and receives OUTSIDE (-1) past the coarsest window, exactly
+    as the reference does. `buffers` are the ring windows; None means the
+    windows centred on `vehicle_xy_m`, as in `ring_of`.
+
+    Every rule the reference applies is applied here, in the same order and
+    with the same float operations in the same order -- the block bound is
+    compared against a radius, and a block exactly on a boundary must land in
+    the same ring on both paths. `ring_of`'s docstring explains why each rule
+    exists; this is the one that runs.
+
+    Lane handover: on return `c` and `d` hold the base-lattice index of every
+    point, which `bin_points` reuses rather than flooring the world twice.
     """
-    n = len(x)
-    radii, floor_ring = scratch["radii"], scratch["floor_ring"]
-    f0, f1 = scratch["f0"][:n], scratch["f1"][:n]
-    # Lane "a" holds the geometric ring here; `bin_points` reuses it for the
-    # clamped ring index only after this function has returned.
-    geom, mask, aux = scratch["a"][:n], scratch["tmp"][:n], scratch["live"][:n]
+    c0 = schedule.base_cell_m
+    n = len(xw)
+    wins = _ring_windows(schedule, vehicle_xy_m, buffers)
+    ks, radii, floor_ring = scratch["ks"], scratch["radii"], scratch["floor_ring"]
+    a_f, a_s, a_r, cy, sy, per = _descent_constants(schedule, ks, speed_ms,
+                                                    vehicle_xy_m, yaw_rad)
+    f0, f1, f2, f3 = (scratch[k][:n] for k in ("f0", "f1", "f2", "f3"))
+    a, b, c, d, e = (scratch[k][:n] for k in "abcde")
+    act, adm, aux, aux2 = (scratch[k][:n] for k in ("live", "tmp", "aux", "aux2"))
+    out = out[:n]
 
-    # Geometry first and consumed into an integer, which frees f1 for d_aniso.
-    np.abs(x, out=f1)
-    np.abs(y, out=f0)
-    np.maximum(f1, f0, out=f1)                       # eq. (18), unstretched
-    _count_at_or_below(f1, radii, geom, mask)
+    # §2.1 eq. (8): the ONE base lattice, once per point.
+    np.floor_divide(xw, c0, out=f0)
+    np.copyto(c, f0, casting="unsafe")          # integer-valued float -> int64
+    np.floor_divide(yw, c0, out=f0)
+    np.copyto(d, f0, casting="unsafe")
 
-    d_aniso_into(x, y, schedule, speed_ms, f1, f0)   # eq. (20)
-    _count_at_or_below(f1, radii, out, mask)
+    # Inside the coarsest window, or OUTSIDE.
+    rings = len(wins)
+    k, W, x0, y0 = wins[-1]
+    np.floor_divide(c, k, out=a)
+    np.subtract(a, x0, out=a)
+    np.greater_equal(a, 0, out=act)
+    np.less(a, W, out=aux)
+    np.logical_and(act, aux, out=act)
+    np.floor_divide(d, k, out=b)
+    np.subtract(b, y0, out=b)
+    np.greater_equal(b, 0, out=aux)
+    np.logical_and(act, aux, out=act)
+    np.less(b, W, out=aux)
+    np.logical_and(act, aux, out=act)
+    out[:] = rings - 1
+    np.logical_not(act, out=aux)
+    np.copyto(out, OUTSIDE, where=aux)
 
-    np.maximum(out, geom, out=out)                   # containment
+    for M in range(rings - 1, 0, -1):
+        kM = ks[M]
+        kP, WP, x0P, y0P = wins[M - 1]
+        r = kM // kP
+        offx, offy, h = per[M]
 
-    if floor_ring is not None:
-        np.less(x, 0.0, out=mask)
-        np.abs(x, out=f0)
-        np.less(f0, REAR_FLOOR_RANGE_M, out=aux)
-        np.logical_and(mask, aux, out=mask)
-        np.less_equal(geom, floor_ring, out=aux)
-        np.logical_and(mask, aux, out=mask)
-        np.minimum(out, floor_ring, out=out, where=mask)
+        np.equal(out, M, out=act)               # still descending
+        np.floor_divide(c, kM, out=a)           # the ring-M block
+        np.floor_divide(d, kM, out=b)
 
-    np.minimum(out, len(radii) - 1, out=out)
-    np.greater_equal(geom, len(radii), out=mask)
-    np.copyto(out, OUTSIDE, where=mask)
+        # (i) every child in the finer window
+        np.multiply(a, r, out=e)
+        np.subtract(e, x0P, out=e)
+        np.greater_equal(e, 0, out=aux)
+        np.logical_and(act, aux, out=act)
+        np.less_equal(e, WP - r, out=aux)
+        np.logical_and(act, aux, out=act)
+        np.multiply(b, r, out=e)
+        np.subtract(e, y0P, out=e)
+        np.greater_equal(e, 0, out=aux)
+        np.logical_and(act, aux, out=act)
+        np.less_equal(e, WP - r, out=aux)
+        np.logical_and(act, aux, out=act)
+
+        # (ii) the block centre, then eq. (20) at its nearest point
+        np.multiply(a, kM, out=e)
+        np.copyto(f0, e, casting="unsafe")
+        np.multiply(f0, c0, out=f0)
+        np.add(f0, offx, out=f0)                # xc
+        np.multiply(b, kM, out=e)
+        np.copyto(f1, e, casting="unsafe")
+        np.multiply(f1, c0, out=f1)
+        np.add(f1, offy, out=f1)                # yc
+        np.multiply(f0, cy, out=f2)
+        np.multiply(f1, sy, out=f3)
+        np.add(f2, f3, out=f2)                  # u = cy*xc + sy*yc
+        np.multiply(f1, cy, out=f3)
+        np.multiply(f0, sy, out=f0)
+        np.subtract(f3, f0, out=f3)             # v = cy*yc - sy*xc
+        np.subtract(f2, h, out=f0)              # forward
+        np.maximum(f0, 0.0, out=f0)
+        np.divide(f0, a_f, out=f0)
+        np.add(f2, h, out=f1)                   # rear
+        np.negative(f1, out=f1)
+        np.maximum(f1, 0.0, out=f1)
+        np.divide(f1, a_r, out=f1)
+        np.maximum(f0, f1, out=f0)
+        np.abs(f3, out=f3)                      # side
+        np.subtract(f3, h, out=f3)
+        np.maximum(f3, 0.0, out=f3)
+        np.divide(f3, a_s, out=f3)
+        np.maximum(f0, f3, out=f0)
+        np.less(f0, radii[M - 1], out=adm)
+
+        if floor_ring is not None and M > floor_ring:
+            np.less(f2, 0.0, out=aux)
+            np.abs(f2, out=f3)
+            np.less(f3, REAR_FLOOR_RANGE_M, out=aux2)
+            np.logical_and(aux, aux2, out=aux)
+            np.logical_or(adm, aux, out=adm)
+
+        np.logical_and(act, adm, out=act)
+        np.subtract(out, 1, out=out, where=act)
     return out
 
 
@@ -407,8 +604,8 @@ def _fill_ring_tables(buffers, scratch) -> None:
         scratch["t_dy"][L] = buf.y0 % W
 
 
-def bin_points(xv, yv, xw, yw, schedule, buffers, out, scratch,
-               speed_ms: float = 0.0):
+def bin_points(xw, yw, schedule, buffers, out, scratch, speed_ms: float = 0.0,
+               vehicle_xy_m=(0.0, 0.0), yaw_rad: float = 0.0):
     """Points -> flat storage slots, in one place. Math §2.1, §2.4, §6.1.
 
     The stage between perception and the grid: ring membership, then the
@@ -420,23 +617,22 @@ def bin_points(xv, yv, xw, yw, schedule, buffers, out, scratch,
     directories, which will disagree eventually, and a binning bug does not
     crash: it produces a plausible map.
 
-    ⚑ TWO frames, and mixing them is the whole difficulty -- the same trap
-      `scatter` warns about, arriving one layer earlier.
+    ⚑ ONE frame now, and the vehicle as a parameter. Until open item D2 this
+      took the points twice -- vehicle frame for the ring, world frame for the
+      cell -- and the ring was decided per point on the rotated sensor frame.
+      That filed points of one coarse cell into two rings (footprints that
+      contain each other, every frame on seq 08) and dropped returns whose
+      ring's world-aligned window did not hold them (0.224%). Ring membership
+      is now decided per world-lattice block (`ring_of`), so it takes the
+      world points plus where the vehicle is and which way it faces.
 
-      `xv, yv`  VEHICLE frame. Decides the RING, because foveation follows the
-                vehicle and ring membership is distance from the sensor (§6.1).
-      `xw, yw`  WORLD frame. Decides the CELL, because cell identity is
-                absolute -- that is the entire reason the toroidal shift
-                exists (§2.4).
+      `vehicle_xy_m` is not optional in practice. Omit it once the vehicle
+      has driven away from the origin and every block reads as hundreds of
+      metres away: nothing is dropped -- the windows still hold the points --
+      but everything is filed in the coarsest ring. Pinned by
+      `test_the_vehicle_position_is_not_optional`.
 
-      Feed world coordinates to `ring_of` and every point reads as OUTSIDE once
-      the vehicle has driven past the last ring's half-width. Feed vehicle
-      coordinates to `i_ring` and the map slides along under the vehicle
-      instead of staying put. Both look correct for the first few seconds, and
-      the first makes the latency table read BETTER -- everything bins to -1,
-      so scatter and fuse post sub-millisecond medians for doing nothing.
-
-    **No ring loop.** The obvious shape is a pass per ring over the points that
+    **No ring loop for the slot.** The obvious shape is a pass per ring over the points that
     fall in it, and that is what all four hand-rolled copies did. It needs the
     selected world coordinates compacted into a buffer, and numpy will not do
     that without allocating: `np.compress(..., out=)` still built 1.54 MB of
@@ -447,15 +643,15 @@ def bin_points(xv, yv, xw, yw, schedule, buffers, out, scratch,
     four compacting copies.
 
     Bit-identical to `ring_of` + `i_ring` + `RingBuffer.flat_slot`, pinned by
-    `test_bin_points_matches_the_reference_path` over both frozen schedules and
-    four speeds. It has to be: those are what the partition test proves things
+    `test_bin_points_matches_the_reference_path` over both frozen schedules,
+    four speeds and several headings. It has to be: those are what the partition test proves things
     about, and a second lattice is what this module's header forbids.
 
     Returns a view of `out` of length len(xv): the flat slot per point, and -1
     for anything outside the map or outside its ring's window. Allocates
     nothing; `scratch` comes from `new_bin_scratch`.
     """
-    n = len(xv)
+    n = len(xw)
     if n > scratch["max_points"]:
         raise ValueError(
             f"{n} points exceeds the {scratch['max_points']} this scratch was "
@@ -466,10 +662,9 @@ def bin_points(xv, yv, xw, yw, schedule, buffers, out, scratch,
     _fill_ring_tables(buffers, scratch)
 
     level = scratch["level"][:n]
-    ring_of_into(xv, yv, schedule, speed_ms, level, scratch)
+    ring_of_into(xw, yw, schedule, speed_ms, level, scratch, buffers,
+                 vehicle_xy_m, yaw_rad)
 
-    c0 = schedule.base_cell_m
-    f = scratch["f0"][:n]
     lv, kk = scratch["a"][:n], scratch["b"][:n]
     ix, iy = scratch["c"][:n], scratch["d"][:n]
     live, aux = scratch["live"][:n], scratch["tmp"][:n]
@@ -489,13 +684,10 @@ def bin_points(xv, yv, xw, yw, schedule, buffers, out, scratch,
     np.maximum(level, 0, out=lv)
     np.take(scratch["t_k"], lv, out=kk, mode="clip")
 
-    # §2.1 eq. (9): floor to the ONE base lattice, then integer-divide by k.
-    # Never floor(x / (k*c0)) -- see this module's header.
-    np.floor_divide(xw, c0, out=f)
-    np.copyto(ix, f, casting="unsafe")          # integer-valued float -> int64
+    # §2.1 eq. (9): the ONE base lattice, integer-divided by k. `ring_of_into`
+    # left the base index in lanes c and d. Never floor(x / (k*c0)) -- see
+    # this module's header.
     np.floor_divide(ix, kk, out=ix)
-    np.floor_divide(yw, c0, out=f)
-    np.copyto(iy, f, casting="unsafe")
     np.floor_divide(iy, kk, out=iy)
 
     # k is spent; the lane becomes the ring side, which is needed to the end.

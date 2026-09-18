@@ -226,10 +226,8 @@ def run_real(seq, frames, ghost_removal, clip_class_ids, no_patchworkpp):
         moving = np.asarray(frame.moving)[:engine.max_points]
         current = set()
         if moving.any():
-            pts = frame.points_sensor[:engine.max_points]
             world = frame.points_world[:engine.max_points]
-            idx = engine.bin(pts[moving, 0], pts[moving, 1],
-                             world[moving, 0], world[moving, 1])
+            idx = engine.bin(world[moving, 0], world[moving, 1])
             current = {int(i) for i in idx[idx >= 0]}
             ever |= current
 

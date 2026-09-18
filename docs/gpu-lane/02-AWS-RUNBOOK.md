@@ -6,6 +6,11 @@ move.*
 
 ---
 
+> **Scripted, 2026-09-17:** `scripts/aws/t4.sh` does every step below in order:
+> `preflight` (spends nothing), `budget`, `stage`, `launch`, `setup`, `run`,
+> `fetch`, then `stop`. It stages the FULL local dataset (84.8 GB, 250 GB disk), not only seq 08. It needs the AWS CLI (`~/.local/bin/aws`) configured with
+> your own credentials. There is no terminate command, on purpose.
+
 ## 1. What we are provisioning, and why
 
 **`g4dn.xlarge`** — <cite index="9-1">4 vCPUs, 16 GiB RAM, one NVIDIA T4 with 16 GiB of GPU memory</cite>. <cite index="5-1">On-demand pricing starts at $0.526/hr in us-east-1</cite>.

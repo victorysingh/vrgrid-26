@@ -86,6 +86,12 @@ class GridMap:
     # (0, 0) for a stationary map, which is what the unit tests use.
     vehicle_xy_m: tuple = (0.0, 0.0)
 
+    # Which way the vehicle faces, radians from world +x. Used only to say
+    # which way is forward for §6.2's anisotropy and rear floor (`ring_of`);
+    # queries themselves stay in the world-axis vehicle frame above. 0.0 is
+    # what the harness and every unit test have always assumed.
+    vehicle_yaw_rad: float = 0.0
+
     # Working set for `lattice.bin_points`, built on first use and then reused
     # for the life of the map. Deliberately NOT part of `allocate()`: a GridMap
     # is built by hundreds of unit tests that never bin a point, and 7.5 MB
@@ -116,11 +122,13 @@ def slot_of(gm: GridMap, x_m: float, y_m: float):
     concerns and each one owned by the file that proved it — this function is
     only allowed to compose them, never to recompute a lattice index itself.
 
-    ⚑ The same two-frame split as `fusion.scatter()`, and it has to be: the
-      RING is decided in the vehicle frame, because foveation follows the
-      vehicle, and the CELL is decided in the world frame, because cell
-      identity is world-anchored and the toroidal window is addressed in world
-      lattice coordinates.
+    ⚑ Vehicle frame in, world lattice out, and it has to be: the RING follows
+      the vehicle (`ring_of` takes the offset plus `gm.vehicle_xy_m`,
+      `gm.vehicle_yaw_rad` and the windows, and decides per world-lattice
+      block, so a query routes to exactly the cell `bin_points` wrote), and
+      the CELL is decided in the world frame, because cell identity is
+      world-anchored and the toroidal window is addressed in world lattice
+      coordinates.
 
       Index the lattice in the vehicle frame instead and nothing raises: the
       window has moved with the vehicle, so the computed slot is simply some
@@ -129,7 +137,8 @@ def slot_of(gm: GridMap, x_m: float, y_m: float):
       ahead, and every metric built on `query()` quietly measures an empty
       map. Found by the plan-regret harness reporting a path 100% unknown.
     """
-    ring = ring_of(x_m, y_m, gm.schedule, gm.speed_ms)
+    ring = ring_of(x_m, y_m, gm.schedule, gm.speed_ms, gm.vehicle_xy_m,
+                   gm.vehicle_yaw_rad, gm.buffers)
     if ring == OUTSIDE:
         return OUTSIDE, -1
 

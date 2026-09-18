@@ -186,6 +186,18 @@
   cleanup's candidates. That is `src/grid/fusion.py`, not mine, and it is the
   largest single per-frame allocation in the system, ahead of `ring_of`'s 6.96
   MB. Both are in the Gate 3 review.
+- **`--device cuda` is the whole pipeline on the card, and it must equal the
+  CPU pipeline bit for bit.** Grid in device memory; range image, labels,
+  reflectivity, shift, bin, scatter, fuse, occupancy and §10.4 are CUDA kernels
+  (`gpu/cuda_kernels.py`, `gpu/device.py`). Only load, the pose transform and
+  Patchwork++ stay on the host. `scripts/gpu_parity.py` compares every
+  perception output and the map hash per frame: seq 08, 200/200 identical.
+  Frame p50 88.6 -> 22.3 ms, p99 107.2 -> 26.7 (meets 10 Hz at p99). Three
+  traps, all measured: compile with `--fmad=false` (NVRTC fuses a*b+c
+  otherwise); never use cupy's float `//` (1.0 // 0.1 == 10 there; the kernel
+  carries numpy's npy_divmod); atan2/asin in double then round to float32. The
+  variance codec is a threshold table bisected from the host function -- no
+  device log. `docs/gpu-lane/08-GPU-FRAME-LOOP.md`.
 - **No OptiX / RT cores.** Unsupported on Jetson; visibility cleanup is already
   O(1) per cell by range-image comparison. Future-work line only.
 

@@ -1,7 +1,34 @@
 # R3 — Ring-boundary-under-anisotropy: nearest-corner test + boundary snapping
 
-**Status:** design only. **Nothing implemented.** Hand-off document for whoever
-writes the kernel-side version.
+**Status:** **IMPLEMENTED 2026-09-17**, by Shrestha while Aakash was away, and
+**not as designed below in one respect.** Read this block first; the design
+underneath is kept as it was written.
+
+- **Part A (nearest point, not centre) — kept**, but applied per BLOCK,
+  coarse to fine: a ring-L block splits into ring L-1 only if every child fits
+  ring L-1's window and eq. (20) at the block's nearest point is below
+  R_{L-1} (or the rear floor forces it). Every point of a block therefore gets
+  the same ring, which is what makes the partition hold.
+- **Part B (snap the boundary to the coarser lattice) — not used.** In the
+  engine the ring rule ran on the ROTATED sensor frame, so the boundary is not
+  axis-aligned and no snap puts it on the lattice; the per-block decision makes
+  the partition hold without it. §2's "per-axis" nearest-corner argument is
+  also only exact at yaw 0; under a heading the bound is taken from the block
+  centre ± (|cos|+|sin|)·c/2, a lower bound that is still a function of the
+  block alone.
+- **Found on the way, and larger than the anisotropy case:** the defect was
+  live at v = 0 on real data. Seq 08, 30 frames: nesting on **every** frame
+  (0.108% of coarse cells) and **0.224% of returns dropped** because the ring
+  was chosen in the rotated frame and missed its world-aligned window. Both
+  are 0 after.
+- §6's open questions: (1) `metrics._ring_cells` moved with it — the centre
+  test is now exact, not a convention; (2) the rear floor is a block predicate
+  inside the descent; (3) OUTSIDE is now "past the coarsest window", decided
+  in integers.
+- Tests: `test_no_cell_footprint_contains_another_under_foveation` and
+  `test_every_return_inside_the_map_is_binned` (both `partition`, CI-blocking).
+  The first fails on the old rule at 20/28 speeds on 5/10/20/40 and 10/20 on
+  5/10/50. Write-up: `docs/known-limitations.md` §8.
 **Owner of the code it touches:** `src/grid/lattice.py` — Aakash.
 **Written:** 2026-09-12, against `main` @ `f3a0337`.
 

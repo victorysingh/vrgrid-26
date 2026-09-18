@@ -37,6 +37,7 @@ SemanticKITTI `.label` ground truth.
   error in the recorded figure, not a model or a code difference.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -56,7 +57,14 @@ def main():
     ap.add_argument("--seq", default="08",
                     help="SemanticKITTI's official validation sequence")
     ap.add_argument("--frames", type=int, default=200)
-    ap.add_argument("--checkpoint", default="checkpoints/frnet-semantickitti_seg.pth")
+    # VRGRID_FRNET_CHECKPOINT is what the README and 10-DL-WHAT-TO-SAY tell
+    # people to set, and `perception/semantics.py:170` already honours it. This
+    # script did not, so the documented variable worked everywhere except the
+    # script a judge would actually be asked to run, and the relative default
+    # meant it only worked from the repo root at all.
+    ap.add_argument("--checkpoint",
+                    default=os.environ.get("VRGRID_FRNET_CHECKPOINT",
+                                           "checkpoints/frnet-semantickitti_seg.pth"))
     ap.add_argument("--fast-scatter", action="store_true",
                     help="swap the frustum reductions for torch.scatter_reduce via "
                          "scripts/frnet_fast_scatter.py -- ~35 min becomes ~1 min. "

@@ -9,10 +9,7 @@ Stages (all JP's, `src/perception/`):
     loader.scans()          raw points + raw .label + GT pose, per frame
     transforms              sensor -> vehicle -> world  (docs/frames.md)
     range_image.project()   64x512 spherical image + inverse index (sensor frame)
-    semantics               semantic_labels() 19-class  (GT .label -- the DEFAULT)
-                            or FRNet predictions with `--semantics frnet` (opt-in DL mode)
-    motion                  is_moving()  (GT .label `moving-*` in BOTH modes: FRNet has
-                            no motion output, and that is disclosed wherever the mode is)
+    semantics               semantic_labels() 19-class + is_moving()  (GT .label)
     ground.segment_ground_or_fallback()  Patchwork++ mask, or the semantic-class
                             fallback (loudly) when pypatchworkpp is absent
     reflectivity.normalise() rho_hat -> one byte  (KITTI: rho_hat = I; the
@@ -25,9 +22,9 @@ then the map back end, in `engine.MapEngine` (see that file for the order):
 The dashboard (`--viz` / `--save`) renders the real per-frame output, replacing
 the Day-0 synthetic plane/boxes/slope one layer at a time via `--color-by`.
 
-⚑ `--show-ghosts` is the Gate 3 toggle and it now drives BOTH halves: the
+âš‘ `--show-ghosts` is the Gate 3 toggle and it now drives BOTH halves: the
   viewer keeps the moving returns in the main cloud, AND the map stops running
-  §10.4, so the ghost trails stay in the cells. Until the engine existed it
+  Â§10.4, so the ghost trails stay in the cells. Until the engine existed it
   drove only the first, which filters the input cloud on the ground-truth
   `moving-*` label and demonstrates nothing about the mapping engine.
 """
@@ -63,8 +60,8 @@ class PerceptionFrame:
 
 
 def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True,
-                  timer=None, start_frame: int = 0, reuse_buffers: bool = False,
-                  semantics_source: str = "gt", frnet=None):
+                  timer=None, start_frame: int = 0, device: str = "cpu",
+                  reuse_buffers: bool = False, semantics_source: str = "gt", frnet=None):
     """Yield a PerceptionFrame per scan of `seq`.
 
     `start_frame` skips ahead before the first yield (default 0, so existing
@@ -79,34 +76,45 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
     precisely so the front end and the map would not invent two spellings of
     "range image"; this is the other half of that.
 
+    `device="cuda"` runs the range image, reflectivity and label stages on the
+    card (`gpu.device.DevicePerception`) and yields `DeviceFrame`s whose
+    outputs stay there for a `MapEngine(device="cuda")` to consume without a
+    copy. Patchwork++ still runs on the host, while the card works. The
+    outputs are bit-identical to the CPU stages -- `scripts/gpu_parity.py`.
+
     `loader.scans` is a generator, so the `load` stage times the pull of one
     scan off it rather than the whole sequence -- which is the per-frame cost
     the 10 Hz budget is about.
-
-    `semantics_source` (default "gt") picks where the 19-class labels come from.
-    "gt" reads the SemanticKITTI `.label` files, which is what every benchmark in
-    this repository measures. "frnet" is the OPT-IN deep-learning mode (SIH26053 asks
-    for a DL pipeline): `frnet` must be a `semantics.FRNetInference` -- anything with
-    `infer_points((N, 4) float32) -> (N,) int32, -1 = ignore` -- and each frame's
-    labels are its predictions on that raw scan. Build it with `open_frnet()`.
-
-    [!] Motion is `is_moving(raw_labels)` in BOTH modes. FRNet has no motion output,
-      so "moving" stays ground truth, and anything reporting the DL mode must say so.
-    [!] FRNet on this CPU costs seconds per frame, and its labels reproduce run to run
-      only with `torch.set_num_threads(1)` (OPEN-ITEMS R-j).
     """
-    from vrgrid.perception import ground, loader, range_image, reflectivity, semantics, transforms
-
-    if semantics_source not in ("gt", "frnet"):
-        raise ValueError(f"semantics_source must be 'gt' or 'frnet', not {semantics_source!r}")
-    if semantics_source == "frnet" and frnet is None:
-        raise ValueError("semantics_source='frnet' needs frnet=open_frnet() "
-                         "(a semantics.FRNetInference)")
-
-    def stage(name):
-        return timer.stage(name) if timer is not None else nullcontext()
+    from vrgrid.perception import ground, loader
 
     scans = loader.scans(seq, max_frames=max_frames, start_frame=start_frame)
+    # `semantics_source="frnet"` is the OPT-IN deep-learning mode: each frame's
+    # 19-class labels come from `semantics.FRNetInference` (build it with
+    # `open_frnet()`) instead of the `.label` files. Ground truth stays the
+    # default, and motion stays `is_moving(raw_labels)` in BOTH modes -- FRNet
+    # has no motion output, which anything reporting the mode must say.
+    if semantics_source not in ("gt", "frnet"):
+        raise ValueError(f"semantics_source must be 'gt' or 'frnet', not {semantics_source!r}")
+    if semantics_source == "frnet":
+        if frnet is None:
+            raise ValueError("semantics_source='frnet' needs frnet=open_frnet() "
+                             "(a semantics.FRNetInference)")
+        if device != "cpu":
+            # The device path yields a DeviceFrame and never runs the host
+            # semantics stage, so the model's labels would be silently ignored.
+            raise ValueError("semantics_source='frnet' is host-only; it cannot be "
+                             f"combined with device={device!r}")
+
+    perception = None
+    if device == "cuda":
+        from vrgrid.gpu.device import DevicePerception, resolve_device
+        resolve_device(device)
+        perception = DevicePerception()
+    # A fresh Patchwork++ estimator per run: it adapts from past scans, so a
+    # shared one made a second run in the same process map differently (see
+    # `ground.reset_estimator`). Runs here, at the first frame's pull.
+    ground.reset_estimator()
 
     # `reuse_buffers` (default OFF): write `points_world` into one scratch reused
     # every frame instead of allocating ~10.9 MB per frame in `transform_points`.
@@ -117,8 +125,10 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
     # the tests do exactly that, which is why the default is off.
     tscratch = None
     if reuse_buffers:
+        from vrgrid.perception import transforms
+
         cap = int(schedule_mod.load_thresholds()["scatter"].get("max_points_per_frame",
-                                                               150_000))
+                                                                150_000))
         tscratch = transforms.new_transform_scratch(cap)
     i = 0
     while True:
@@ -133,59 +143,113 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
         if timer is not None:
             timer.record("load", (time.perf_counter() - t0) * 1e3)
         points, raw_labels, pose = item
+        yield perceive(points, raw_labels, pose, seq, start_frame + i,
+                       use_patchworkpp=use_patchworkpp, timer=timer,
+                       perception=perception, scratch=tscratch,
+                       semantics_source=semantics_source, frnet=frnet)
+        i += 1
 
-        with stage("transform"):
-            t_s_w = transforms.sensor_to_world(pose, sequence=seq)
-            points_world = transforms.transform_points(points[:, :3], t_s_w,
-                                                       scratch=tscratch)
-            vehicle_xyz = transforms.vehicle_to_world(pose, sequence=seq)[:3, 3]
 
-        with stage("range_image"):
-            ri, inv = range_image.project(points)
-        with stage("semantics"):
-            if semantics_source == "frnet":
-                # The model's labels, on the raw sensor-frame scan -- the same input
-                # scripts/frnet_eval.py scores. Same dtype and ignore convention (-1)
-                # as semantic_labels(), so nothing downstream changes shape.
-                semantic = frnet.infer_points(np.asarray(points, dtype=np.float32))
-            else:
-                semantic = semantics.semantic_labels(raw_labels)
-        with stage("motion"):
-            moving = semantics.is_moving(raw_labels)
+def perceive(points, raw_labels, pose, seq: str, index: int, use_patchworkpp=True,
+             timer=None, perception=None, ground_result=None, scratch=None,
+             semantics_source="gt", frnet=None):
+    """Every perception stage for one scan, on the host or on the card.
 
+    `perception` is a `gpu.device.DevicePerception` for the device path, None
+    for the CPU one. `ground_result` = `(mask, method)` skips ground
+    segmentation and uses that result instead -- which is how the parity check
+    feeds one Patchwork++ answer to both paths (the estimator is stateful, so
+    running it twice would not be a controlled comparison).
+    """
+    from vrgrid.perception import ground, range_image, reflectivity, semantics, transforms
+
+    if perception is not None:
+        from vrgrid.gpu.device import synced_stage
+        stage = synced_stage(timer)
+    else:
+        def stage(name):
+            return timer.stage(name) if timer is not None else nullcontext()
+
+    with stage("transform"):
+        t_s_w = transforms.sensor_to_world(pose, sequence=seq)
+        points_world = transforms.transform_points(points[:, :3], t_s_w, scratch=scratch)
+        vehicle_xyz = transforms.vehicle_to_world(pose, sequence=seq)[:3, 3]
+
+    if perception is not None:
+        if semantics_source != "gt":
+            raise ValueError("the device path yields a DeviceFrame and does not run the "
+                             f"host semantics stage; semantics_source={semantics_source!r} "
+                             "would be silently ignored")
+        from vrgrid.gpu.device import DeviceFrame
+
+        # Queued, not waited for: the card projects while the host segments.
+        perception.launch(points, points_world, raw_labels,
+                          stage=stage if timer is not None else None)
         with stage("ground"):
+            if ground_result is None:
+                # Patchwork++ needs no labels; the semantic fallback does, and
+                # reading them back is its own cost only on that path.
+                need_labels = not (use_patchworkpp and ground._HAVE_PATCHWORKPP)
+                sem_host = (perception.sem[:len(points)].get() if need_labels
+                            else None)
+                gmask, ground_method = ground.segment_ground_or_fallback(
+                    points, sem_host, use_patchworkpp=use_patchworkpp)
+            else:
+                gmask, ground_method = ground_result
+        perception.finish()
+        return DeviceFrame(perception, index=index, points_sensor=points,
+                           points_world=points_world, pose=pose,
+                           vehicle_xyz_world=vehicle_xyz, ground=gmask,
+                           ground_method=ground_method)
+
+    with stage("range_image"):
+        ri, inv = range_image.project(points)
+    with stage("semantics"):
+        if semantics_source == "frnet":
+            # The model's labels, on the raw sensor-frame scan -- the same input
+            # scripts/frnet_eval.py scores. Same dtype and ignore convention (-1)
+            # as semantic_labels(), so nothing downstream changes shape.
+            semantic = frnet.infer_points(np.asarray(points, dtype=np.float32))
+        else:
+            semantic = semantics.semantic_labels(raw_labels)
+    with stage("motion"):
+        moving = semantics.is_moving(raw_labels)
+
+    with stage("ground"):
+        if ground_result is None:
             gmask, ground_method = ground.segment_ground_or_fallback(
                 points, semantic, use_patchworkpp=use_patchworkpp)
+        else:
+            gmask, ground_method = ground_result
 
-        with stage("reflectivity"):
-            # with_incidence=False: cos_inc and flags are discarded just below
-            # and PerceptionFrame stores neither, so skip computing them. rho8 is
-            # unchanged by construction on the KITTI path (tests pin it).
-            refl = reflectivity.normalise(ri, with_incidence=False)
-            rho8, _ = reflectivity.scatter_to_points(refl, inv)
-            if len(rho8) < len(points):  # pad points that never projected
-                rho8 = np.concatenate([rho8, np.zeros(len(points) - len(rho8), np.uint8)])
+    with stage("reflectivity"):
+        # with_incidence=False: cos_inc and flags are discarded just below and
+        # PerceptionFrame stores neither, so skip computing them. rho8 is
+        # unchanged by construction on the KITTI path (tests pin it).
+        refl = reflectivity.normalise(ri, with_incidence=False)
+        rho8, _ = reflectivity.scatter_to_points(refl, inv)
+        if len(rho8) < len(points):  # pad points that never projected
+            rho8 = np.concatenate([rho8, np.zeros(len(points) - len(rho8), np.uint8)])
 
-        # The map back end (bin -> scatter -> fuse -> cleanup -> shift) runs in
-        # `engine.MapEngine.step(frame)`, called by `main()` on each frame this
-        # generator yields -- see the module docstring.
+    # The map back end (bin -> scatter -> fuse -> cleanup -> shift) runs in
+    # `engine.MapEngine.step(frame)`, called by `main()` on each frame this
+    # generator yields -- see the module docstring.
 
-        yield PerceptionFrame(
-            index=start_frame + i,
-            points_sensor=points,
-            points_world=points_world,
-            pose=pose,
-            vehicle_xyz_world=vehicle_xyz,
-            semantic=semantic,
-            moving=moving,
-            ground=gmask,
-            reflectivity8=rho8,
-            range_image=ri,
-            inverse_index=inv,
-            ground_method=ground_method,
-            semantic_source=semantics_source,
-        )
-        i += 1
+    return PerceptionFrame(
+        index=index,
+        points_sensor=points,
+        points_world=points_world,
+        pose=pose,
+        vehicle_xyz_world=vehicle_xyz,
+        semantic=semantic,
+        moving=moving,
+        ground=gmask,
+        reflectivity8=rho8,
+        range_image=ri,
+        inverse_index=inv,
+        ground_method=ground_method,
+        semantic_source=semantics_source,
+    )
 
 
 def open_frnet(fast_scatter: bool = False, threads: int | None = None):
@@ -240,11 +304,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Gate 3 toggle OFF: keep moving points in the main cloud "
                         "and stop running the map's visibility cleanup, so ghost "
                         "trails stay in the cells (default: both on)")
+    p.add_argument("--device", default="cpu", choices=["cpu", "cuda"],
+                   help="cuda: perception (except Patchwork++) and the whole map run on "
+                        "the card, grid in device memory. Bit-identical to cpu "
+                        "(scripts/gpu_parity.py)")
     p.add_argument("--no-map", action="store_true",
                    help="perception only; skip the map back end entirely")
     p.add_argument("--clip-class-ids", action="store_true",
                    help="clip semantic ids to 15 so fusion's 4-bit candidate "
-                        "accepts them (math §10.2). Corrupts the class layer; "
+                        "accepts them (math Â§10.2). Corrupts the class layer; "
                         "the real fix is the 5/3 split, a room decision")
     p.add_argument("--palette", default="semantickitti", choices=["semantickitti", "groups"],
                    help="class colours: the 19-class standard, or 7 colourblind-safe groups")
@@ -252,7 +320,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--semantics", default="gt", choices=["gt", "frnet"],
                    help="gt (default): 19-class labels from the .label files, as every "
                         "benchmark uses. frnet: OPT-IN deep-learning mode, labels predicted "
-                        "by FRNet on each raw scan. Motion stays ground truth in both.")
+                        "by FRNet on each raw scan (host only). Motion stays ground truth "
+                        "in both.")
     p.add_argument("--fast-scatter", action="store_true",
                    help="with --semantics frnet: apply scripts/frnet_fast_scatter.py (verified)")
     p.add_argument("--threads", type=int, default=None,
@@ -276,9 +345,13 @@ def main(argv=None) -> int:
     engine = None
     if not args.no_map:
         engine = MapEngine(sched, ghost_removal=not args.show_ghosts,
-                           clip_class_ids=args.clip_class_ids)
+                           clip_class_ids=args.clip_class_ids, device=args.device)
         print(f"map: {engine.handle.allocated_slots:,} slots preallocated, "
-              f"ghost removal {'OFF' if args.show_ghosts else 'ON'}")
+              f"ghost removal {'OFF' if args.show_ghosts else 'ON'}, "
+              f"device {engine.device}")
+        if engine.device_bytes() is not None:
+            print(f"     {engine.device_bytes()['static'] / 1e6:.2f} MB on the card: "
+                  "grid, scatter and cleanup buffers")
 
     if args.semantics != "frnet" and (args.fast_scatter or args.threads is not None):
         raise SystemExit("--fast-scatter and --threads only apply to --semantics frnet")
@@ -303,14 +376,18 @@ def main(argv=None) -> int:
     n, cleared, protected = 0, 0, 0
     truncated_frames, truncated_peak = 0, 0
     ground_method = None
-    # Buffers are reused only with no dashboard attached: the loop below then
-    # finishes with each frame before pulling the next. A dashboard view may hold
-    # frames, so it keeps the allocating path.
+    t_pull = time.perf_counter()
+    # Buffers are reused only with no dashboard attached and on the host path: the
+    # loop then finishes with each frame before pulling the next, and a DeviceFrame
+    # retains points_world.
     for frame in iter_pipeline(args.seq, args.frames, use_patchworkpp=not args.no_patchworkpp,
-                               start_frame=args.start_frame, reuse_buffers=view is None,
+                               start_frame=args.start_frame, device=args.device,
+                               reuse_buffers=view is None and args.device == "cpu",
                                semantics_source=args.semantics, frnet=frnet):
+        t_frame = time.perf_counter()          # the pull above was perception
         ground_method = frame.ground_method
         counters = engine.step(frame) if engine is not None else None
+        t_step = time.perf_counter()
         if counters is not None:
             cleared += counters.cleared
             protected += counters.protected
@@ -318,8 +395,11 @@ def main(argv=None) -> int:
                 truncated_frames += 1
                 truncated_peak = max(truncated_peak, counters.truncated)
         if view is not None:
-            view.log_frame(frame)
+            view.log_frame(frame, counters=counters,
+                           timing_ms={"perception": (t_frame - t_pull) * 1e3,
+                                      "engine": (t_step - t_frame) * 1e3})
         n += 1
+        t_pull = time.perf_counter()           # the next pull starts now
         if n % 20 == 0:
             msg = f"  frame {frame.index}: {len(frame.points_sensor):,} pts"
             if counters is not None:
@@ -328,7 +408,7 @@ def main(argv=None) -> int:
             print(msg)
 
     if view is not None:
-        view.log_features()   # final state; no-op unless --features
+        view.finish()   # final map + features state, whichever frame the run ended on
     print(f"done: {n} frames, sequence {args.seq}")
     if ground_method == "semantic_fallback":
         print("[!] ground: SEMANTIC-CLASS FALLBACK, not Patchwork++ -- every "
@@ -341,13 +421,13 @@ def main(argv=None) -> int:
         # is zero by construction, which is the point of printing it.
         print(f"ghost removal: {cleared:,} cells cleared, {protected:,} spared by "
               f"the current-return guard")
-        # ⚑ Loud, and above any other summary, because it invalidates the line
+        # âš‘ Loud, and above any other summary, because it invalidates the line
         #   printed just before it. A truncated cell is never tested, keeps its
         #   occupancy, and cannot appear in `cleared` -- so a run that
         #   truncates reports a healthy ghost count while the map keeps its
         #   ghosts. Silence here used to be the only signal that the cap held.
         if truncated_frames:
-            print(f"⚑ visibility cap TRUNCATED on {truncated_frames} of {n} "
+            print(f"âš‘ visibility cap TRUNCATED on {truncated_frames} of {n} "
                   f"frames, up to {truncated_peak:,} occupied cells dropped "
                   f"and never tested.")
             print("  Raise visibility.max_candidate_cells; the ghost numbers "

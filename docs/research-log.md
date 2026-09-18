@@ -462,3 +462,94 @@ Driving the shipping code with one `Timer` shared across both halves, 200 frames
 **Source:** `scripts/frnet_fast_scatter.py` (self-verifying: `python scripts/frnet_fast_scatter.py` prints the equivalence check and the benchmark), `scripts/frnet_finetune.py --fast-scatter`, `scripts/frnet_eval.py [--fast-scatter]`. 650 passed, 2 skipped; `ruff check .` clean; both CI-blocking tests pass.
 
 **So what:** The DL half is now a defensible position rather than an anecdote — three recipes measured on a held-out sequence, all reported, the pretrained checkpoint retained on evidence. Two numbers on slides need changing before anyone else reads them off: **65.2% mIoU, not 69.8%**, and the latency claim needs to say whether it is quoting the back half or the frame. The end-to-end p99 is the one that is genuinely uncomfortable, and it is uncomfortable by 0.43 ms — worth knowing before a judge asks rather than after.
+
+## 2026-09-17 — Shrestha (Aakash's lane, while he was away)
+
+**Module:** D1 — lattice (§2, §6) and evaluation (§9)
+
+**What happened:** Closed the open items in Aakash's lane: D2 / R3 (ring boundary), ring 0's missing ρ, §9.2 against a per-ring reference, the stale eleven-sequence table, and the money plot's non-monotone step. Full write-ups are `known-limitations.md` §§2b, 8, 9, 10 and `docs/handover-2026-09-17-aakash.md`.
+
+**⚑ 1. D2 was live at v = 0 on real data, not only under anisotropy.** The engine chose each return's ring from `points_sensor`, which rotates with the heading, against world-aligned ring windows. Seq 08, 30 frames: a coarse cell contained a finer occupied cell on every frame (0.108% of coarse cells), and 0.224% of returns were dropped because their ring's window did not hold them. The rule is now per world-lattice block, coarse to fine. Both figures are 0, CPU and GPU are identical on 200/200 frames, and the new CI-blocking partition test fails on the old rule at 20 of 28 speeds.
+
+**⚑ 2. Ring 0 has a ρ: 1.16 [1.11–1.29], n = 11.** Spread now includes the within-cell variance. Ring 1 moves 1.39 → 1.25, the flattering direction, so both are published. The same term in the regret costmap's roughness bit took seq 08's R(S) from 0.127 to 2.497. It is sensor noise the map side cannot see, so roughness keeps the between-cell variance.
+
+**⚑ 3. Against only the returns each ring received, ρ is 1.03–1.08, and that is NOT a headline.** It shows the fusion is faithful. The gap to the M\* table is cross-look disagreement: ring 2's median RMSE is 9.22 cm against M\* and 2.62 cm against its own returns. Seq 00's ring-2 outlier (2.20) is entirely that (1.02). Ring 3 on 08/09/10 does not move at all, so its error is inside the map (new open item N-1).
+
+**⚑ 4. The money plot, paired over the same 64 queries.** Seq 08's step is noise, with every step under 1.6 SE. Seq 07's uniform 20 cm is really worse than both neighbours (~8 SE) and seq 09's 40 cm really beats 20 cm (2.6 SE), which is new open item N-2. The 40 → 80 cm step costs regret at ≥ 2 SE on 7 of 11 sequences.
+
+**Also:** a bug of mine along the way. The packed 64-bit cell key overflowed the sign bit, and the tests passed because they compared one broken unpacking against another. It was caught by a debug print of index ranges before any number was recorded, and is pinned by `test_ring_observations_rebuild_m_star_exactly`.
+
+**Source:** `python scripts/eval_synthetic.py --seq <00..10> --frames 40`. `python scripts/gpu_parity.py --seq 08 --frames 200`. `python scripts/timing_table.py --seq 08 --frames 200 --device {cpu,cuda}`.
+
+**So what:** The partition theorem now holds on the real frame path, not only in the unit test's frame. The headline ρ is regenerated and quoted two ways. The accuracy budget has a new decomposition, which says the next centimetres are in cross-look registration, not in the schedule.
+
+## 2026-09-17 (later) — Shrestha
+
+**Module:** D3 — the 8 m band (`gpu/kernels.py`, `gpu/shift.py`, CUDA kernels), and its scoring
+
+**What happened:** Ring 3 on 08/09/10 was the open item §9 had just narrowed to "inside the map". There were two defects. Out-of-band ground was clamped and then fused at full Kalman weight: on 08, returns 20–26 m below the road put 99.5% of ring 3's squared error in nine cells. And datum re-basing moved band-edge cells 1 m inside the band, where nothing could see they were saturated: 25 cells on 09 at exactly +5.00 m, 168 on 10 at exactly −1.00 m. Now a return outside the band carries no height weight, and a re-based height that leaves the band loses its evidence. The same logic runs on CPU and GPU, and the two are still identical on 200/200 frames. Scoring uses the same rule, through `build_from_scans(band=True)`.
+
+**Numbers:** ring 3 ρ 08 1.84 → 1.03, 09 1.64 → 1.48 (the rest is cross-look disagreement), 10 1.82 → 1.13. Latency is unchanged (cuda 22.3 / 25.9 ms).
+
+**⚑ Cost:** seq 04's ring 3 got worse (20.6 → 24.5 cm). Traced one cell: the true ground sits 2 cm below the floor after a datum step, and a misclassified return 3 m above it now defines the cell. The band floor is only ~2–3 m below road level, so rebalancing it is open item N-5 and needs a team decision.
+
+**Final headline after both fixes:** ring 1 ρ 1.36 [1.16–1.53] (between-cell) / 1.22 [1.11–1.36] (with within-cell term); ring 0 ρ 1.17 [1.13–1.29]. The figures in the entry above predate the band fix.
+
+**Source:** `python scripts/eval_synthetic.py --seq <00..10> --frames 40`; `known-limitations.md` §11.
+
+## 2026-09-17 (evening) — Shrestha
+
+**Module:** D3 — VRAM attribution and contention (`03-CUDA-PORT-PLAN.md` §5, §6)
+
+**What happened:** `scripts/vram_contention.py` runs five configurations, each in its own process: a bare CUDA context, the grid alone, FRNet alone, both in one loop, and both as two concurrent processes. The run was on the RTX 5050 laptop, seq 08, 200 frames. The full write-up is `docs/gpu-lane/09-VRAM-CONTENTION.md`, and the raw record is its JSON.
+
+**Numbers:**
+- **Declared vs pool.** Declared device memory is 145.08 MB, and cupy's pool holds 145.1 MB. Of that, 107 MB is the §10.4 cleanup and 10.9 MB is the grid.
+- **Process footprint.** The grid process occupies 594 MiB on the card: 86 MiB context and 237 MB cupy cache.
+- **FRNet.** 40 MB of weights, a 1.6 GB allocated peak, 4.1 GB reserved.
+- **Card peak.** Both together peak at 4.7 GB of 8 GB.
+- **Latency.** Grid alone is 22.0 / 27.8 ms and FRNet alone 91.3 / 98.7 ms (p50 / p99). In one loop the frame is 122.8 / 130.3 ms, 8.4% over the sum, and misses 10 Hz. As two processes the grid runs at 52.8 / 69.1 ms (+140% at p50) but still meets 10 Hz.
+
+**⚑ Power cap:** every FRNet configuration ran at the laptop's software power cap (0x4, 96 W). The T4 column remains open.
+
+**So what:** R9b now has a table in which every megabyte is attributed. The contention result gives a latency reason, on top of the evaluation reason, to keep segmentation out of the map's loop.
+
+## 2026-09-17 (night) — Shrestha
+
+**Module:** D3 — the band rebalanced, and the GPU pipeline on every labelled sequence
+
+**Band:** −2 / +6 m became −3.5 / +4.5 m, still 8 m wide. The split was chosen by surveying ground returns beyond 10 m on all eleven sequences (every 10th frame): the median share outside the band fell from 0.384% to 0.009%, and the mean from 1.265% to 0.541%. Against the eval, ring 3's median RMSE went 12.96 → 10.38 cm and seq 04's ring 3 recovered (24.47 → 18.24 cm). Every ring 3 now sits within 4% of its own returns (ρ 1.01–1.04). Headline: ring 1 ρ 1.39 [1.16–1.53] on the between-cell spread and 1.25 [1.11–1.33] with the within-cell term; ring 0 1.17 [1.13–1.29]. `known-limitations.md` §11.
+
+**GPU on real data:** CPU and GPU pipelines are bit-identical on every frame for the first 200 frames of all eleven sequences, and across the whole of seq 08 (4,071 frames). The pool held 145.08 MB at the end of the drive, the same as after frame 0. New `scripts/engine_eval.py` scores the ENGINE's map rather than the eval harness's map. On all eleven sequences the CPU and CUDA engines give identical metrics, e.g. seq 08 ring 1 2.33 cm / ρ 1.16. `docs/gpu-lane/08-GPU-FRAME-LOOP.md`.
+
+**Not covered:** sequences 11–21 (no labels) and any simulator (CARLA, D7, never started).
+
+## 2026-09-17 (late) — Shrestha
+
+**Module:** D1 — plan regret (`eval/plan_regret.py`)
+
+**What happened:** Seq 07's uniform 20 cm regret spike (2.237, between 10 cm's 1.519 and 40 cm's 1.667, ~8 SE paired) came from the metric, not the map. `costmap_from_gridmap` weighted each map cell under a 25 cm planning cell by its observation count, so a coarse cell clipping the footprint's corner leaked its height in. Where 20 cm beats against 25 cm, every 1 m, this made phantom step and slope walls: on M*'s optimal paths, 23 + 27 at 20 cm, against 16 + 20 at 10 cm. Now each cell is weighted by the share of the footprint it covers, the reference side's own estimator, and seq 07 reads 1.207 / 1.563 / 1.686 / 2.417 for uniform 10 / 20 / 40 / 80 cm, monotone. Ruled out on the way: the OR of stored roughness/class bits (moves R(S) < 0.01).
+
+**⚑ A test premise changed:** "uniform 20 cm misses more pothole walls" was the same leak. Neither map misses one now; the test asserts both find all 12 and the coarse map has the larger depth error.
+
+**Open:** seq 09's 20 → 40 cm step (−2.5 SE), unchanged by this fix.
+
+## 2026-09-17 (last) — Shrestha
+
+**Module:** D1 — M*'s class layer (`eval/reference_map.py`)
+
+**What happened:** Seq 09's uniform 20 → 40 cm regret step (−2.5 SE) survived the area-weighting fix. Six queries carried it, all from one road edge. M* called the edge drivable and every map called it non-drivable (§7.1 bit 4), so each map detoured, and 40 cm's detour happened to tie. The two sides measured class differently: the map votes over all of a cell's returns, M* took the first ground return. M* now takes the per-cell majority of every static return, and heights stay ground-only. Result: 09's extra class bits fall 54 → 11, 09 is monotone (+2.1, +2.6 SE), and no uniform curve on any sequence has a backward step past 2 SE. Seq 07's R(S) roughly halves, because class penalties were part of every path.
+
+## 2026-09-17 (evening, laptop items) — Shrestha
+
+**Module:** D3 — roadmap Days 1, 4 and 7 in the GPU/CUDA column, the parts that do not need AWS
+
+**What happened:** Laptop baselines for the AWS reproduction: fast-scatter is exact (max) and within 2 ulp (mean); FRNet reproduces at 90.3% / 65.2%. R9's missing rows on real seq 08: split/merge 49.6 ms, traversability 37.4 ms, pyramid 2.8 ms p50. The pool is full and refuses ~3,500 gate requests a frame, so split/merge + traversability would set the latency of any pipeline that enables them. R4's cost: −0.17% cells written per frame, against the ~0.1% expected. Stage attrition added to the engine, identical on both devices: on seq 08 only 20.9% of returns win a range-image pixel. `docs/gpu-lane/10-R9-R4-ATTRITION.md`.
+
+## 2026-09-17 (night) — Shrestha
+
+**Module:** D3 — speeding up split/merge and traversability (Aakash's `src/grid`, at Shrestha's request)
+
+**What happened:** R9 showed that the refinement pool (49.6 ms) and the §7.1 bitfield (37.4 ms) would set the latency of any pipeline that enables them. Both are now much faster, with decisions unchanged. `gate.apply` makes the same sequential decisions without per-request table scans: 8.5 ms. `traversability.bitfield` uses lookup tables and cached stencils on the host (30 ms), or runs on the card via `update(device="cuda")` (4.8 ms), with a guard band for CUDA's last-bit `hypot` differences. Seq 08: map hash, pool state and gate counts identical frame by frame. The references are kept and pinned by equivalence tests, and the gate test is mutation-checked. Pyramid unchanged at 2.8 ms. Total ~87 → ~16 ms.
+
+**Flagged for Aakash:** a refined cell that fires again has its block re-split from the parent every frame, overwriting its children. Left unchanged.

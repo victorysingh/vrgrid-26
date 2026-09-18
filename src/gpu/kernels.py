@@ -39,6 +39,7 @@ height and variance untouched. Every other column stays over all returns.
 
 import numpy as np
 from vrgrid.cell import CELL_BYTES
+from vrgrid.gpu import compat
 
 # Inverse-variance weights are quantised to integers so the accumulation stays
 # exactly associative. 1024 gives ~3 decades of dynamic range between a 5 m
@@ -46,8 +47,30 @@ from vrgrid.cell import CELL_BYTES
 WEIGHT_SCALE = 1024
 WEIGHT_MAX = 1 << 20
 
-# Vertical extent -2 to +6 m, in the 1 cm units heights are stored in.
-Z_MIN_CM, Z_MAX_CM = -200, 600
+# Vertical extent -3.5 to +4.5 m about the datum, in the 1 cm units heights are
+# stored in. The datum is floor(road z) in 1 m steps (`shift.datum_step`), so the
+# road itself is always 0-1 m above it.
+#
+# ⚑ Rebalanced 2026-09-17 from -2 / +6 m. Still 8 m, so no memory figure moves
+#   and the dense-3D baseline counts the same voxels. The old split kept only
+#   2-3 m below the road and 5-6 m above it, and far-field downhill ground left
+#   the band first (`known-limitations.md` §11). Surveyed over all eleven
+#   labelled sequences, every 10th frame, ground returns beyond 10 m:
+#
+#       split           lost, median seq   lost, mean seq
+#       [-2.0, +6.0]         0.384%            1.265%
+#       [-3.0, +5.0]         0.031%            0.620%
+#       [-3.5, +4.5]         0.009%            0.541%     <- this
+#       [-4.0, +4.0]         0.052%            0.604%
+#       [-4.5, +3.5]         0.110%            0.828%
+#
+#   Below -3.5 the uphill loss grows faster than the downhill loss shrinks.
+#   The top stays clear of §7.1's clearance test: +4.5 m is the road (at most
+#   +1 m) plus the 1.8 m vehicle height with 1.7 m left for rising ground, so a
+#   ceiling clamped at the top can never read as a clearance failure over road
+#   inside the band. What no 8 m placement holds is seq 01's embankments, 11 m
+#   below the carriageway (3.3% of its far ground).
+Z_MIN_CM, Z_MAX_CM = -350, 450
 
 # Packed class key: point_id * CLASS_RADIX + class_id. Taking the integer
 # minimum of that key yields the lowest-numbered point in the cell AND its
@@ -145,6 +168,30 @@ def quantise_height(z_m, datum_m: float = 0.0) -> np.ndarray:
     return np.clip(z_cm, Z_MIN_CM, Z_MAX_CM).astype(np.int16)
 
 
+def out_of_band(z_m, datum_m: float = 0.0) -> np.ndarray:
+    """Which heights `quantise_height` would CLAMP rather than store.
+
+    Same arithmetic in the same order -- scale, subtract the datum, round --
+    so a height exactly on the edge after rounding is in the band, exactly as
+    the clamp leaves it untouched.
+
+    ⚑ A clamped ground return is not a measurement, and fusing one as if it
+      were is how ring 3 read 54.8 cm RMSE on seq 08 while its median error
+      was 0.32 cm: ground 10-21 m below the vehicle's band, 50-100 m away,
+      entered the Kalman update at the band floor and dragged nine cells a
+      metre off, carrying 99.5% of the ring's squared error. So the callers
+      zero these returns' HEIGHT weight: they still count as observations and
+      still stay out of the ceiling, but they cannot move `ground_height`. A
+      cell whose only ground is outside the band keeps no height -- unknown,
+      which is true -- instead of a confident wrong one.
+    """
+    z_cm = np.asarray(z_m, dtype=np.float64) * 100.0
+    if datum_m:
+        z_cm -= datum_m * 100.0
+    np.rint(z_cm, out=z_cm)
+    return (z_cm < Z_MIN_CM) | (z_cm > Z_MAX_CM)
+
+
 class CellAggregate:
     """One frame's evidence, per touched cell. Input to fuse() (math §3.3).
 
@@ -196,8 +243,9 @@ class CellAggregate:
 
         `quantise_weight()` clips every point's weight to >= 1, so a zero sum
         cannot mean "ground returns that happened to weigh nothing". It means
-        the cell held nothing but canopy, wall or vehicle, and §3 has no height
-        measurement to offer for it.
+        the cell held nothing but canopy, wall or vehicle -- or ground outside
+        the 8 m band, whose weight the caller zeroed (`out_of_band`) -- and §3
+        has no height measurement to offer for it.
         """
         return self.w_sum > 0
 
@@ -217,7 +265,12 @@ def _validate(idx, z_cm, w_q, refl, class_id, is_ground):
                       ("class_id", class_id), ("is_ground", is_ground)):
         if len(arr) != n:
             raise ValueError(f"{name} has {len(arr)} entries, idx has {n}")
-    if n and int(np.asarray(class_id).max()) >= CLASS_RADIX:
+    # `.max()` on the array itself rather than through `np.asarray`: a cupy
+    # array refuses implicit host conversion, and forcing one here would both
+    # fail on device and, if it did not, copy the whole column every frame to
+    # answer a question the device can answer in place. `int()` of a 0-d
+    # device scalar is the one synchronisation this check costs.
+    if n and int(class_id.max()) >= CLASS_RADIX:
         raise ValueError(f"class ids must be < {CLASS_RADIX} to pack into the class key")
     return n
 
@@ -250,6 +303,11 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     n = _validate(idx, z_cm, w_q, refl, class_id, is_ground)
     if scratch is None:
         scratch = new_sorted_scratch(max(n, 1))
+    # The scratch decides the backend. Everything below is written once and
+    # runs on both; the four primitives cupy is missing come from `compat`,
+    # whose CPU branches are the exact numpy spellings this function used
+    # before it was portable, so a CPU frame is byte-identical to before.
+    xp = _backend_of(scratch["key"])
     cap = len(scratch["key"])
     if n > cap:
         raise ValueError(
@@ -259,18 +317,18 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     if n == 0:
         return _empty_aggregate()
 
-    idx = np.asarray(idx)
+    idx = xp.asarray(idx)
     # The gathers below need each payload column to arrive in exactly the width
     # its scratch buffer declares -- `np.take` refuses a wider `out`. These are
     # free views when the caller already speaks the contract, which
     # `fusion.scatter()` does; a caller that does not pays one copy per column
     # per frame, which is why the boundary coercion lives there and not here.
-    z_cm = np.asarray(z_cm, dtype=np.int16)
-    w_q = np.asarray(w_q, dtype=np.int32)
-    refl = np.asarray(refl, dtype=np.int32)
-    is_ground = np.asarray(is_ground, dtype=np.bool_)
-    class_id = np.asarray(class_id, dtype=np.uint8)
-    pid = scratch["iota"][:n] if point_id is None else np.asarray(point_id)
+    z_cm = xp.asarray(z_cm, dtype=np.int16)
+    w_q = xp.asarray(w_q, dtype=np.int32)
+    refl = xp.asarray(refl, dtype=np.int32)
+    is_ground = xp.asarray(is_ground, dtype=np.bool_)
+    class_id = xp.asarray(class_id, dtype=np.uint8)
+    pid = scratch["iota"][:n] if point_id is None else xp.asarray(point_id)
     if int(pid.max()) >= POINT_RADIX or int(pid.min()) < 0:
         raise ValueError(f"point ids must lie in [0, {POINT_RADIX}) to pack into the sort key")
     if int(idx.max()) >= CELL_MAX:
@@ -281,30 +339,30 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     # they land in one contiguous tail we can simply ignore.
     key = scratch["key"][:n]
     drop = scratch["drop"][:n]
-    np.multiply(idx, POINT_RADIX, out=key, casting="unsafe")
-    np.add(key, pid, out=key, casting="unsafe")
-    np.multiply(key, POINT_RADIX, out=key)
-    np.add(key, scratch["iota"][:n], out=key, casting="unsafe")  # position: the gather index
-    np.less(idx, 0, out=drop)
-    np.copyto(key, KEY_DROPPED, where=drop)
-    m = n - int(np.count_nonzero(drop))
+    xp.multiply(idx, POINT_RADIX, out=key, casting="unsafe")
+    xp.add(key, pid, out=key, casting="unsafe")
+    xp.multiply(key, POINT_RADIX, out=key)
+    xp.add(key, scratch["iota"][:n], out=key, casting="unsafe")  # position: the gather index
+    xp.less(idx, 0, out=drop)
+    xp.copyto(key, KEY_DROPPED, where=drop)
+    m = n - int(xp.count_nonzero(drop))
     if m == 0:
         return _empty_aggregate()
 
-    key.sort(kind="quicksort")  # in place; keys are unique, so order is total
+    compat.sort_inplace(xp, key)  # keys are unique, so the order is total
     key = key[:m]
 
     cell, order = scratch["cell"][:m], scratch["order"][:m]
-    np.floor_divide(key, POINT_RADIX * POINT_RADIX, out=cell, casting="unsafe")
-    np.remainder(key, POINT_RADIX, out=order, casting="unsafe")
+    xp.floor_divide(key, POINT_RADIX * POINT_RADIX, out=cell, casting="unsafe")
+    xp.remainder(key, POINT_RADIX, out=order, casting="unsafe")
 
     # Segment starts: the first point of each cell, in one pass over the sorted
     # cell column. This replaces `np.unique`, which sorted the column a second
     # time to rediscover an order we already have.
     bnd = scratch["bnd"][:m]
     bnd[0] = True
-    np.not_equal(cell[1:], cell[:-1], out=bnd[1:])
-    k = int(np.count_nonzero(bnd))
+    xp.not_equal(cell[1:], cell[:-1], out=bnd[1:])
+    k = int(xp.count_nonzero(bnd))
     seg = scratch["seg"][:k]
     # `np.compress(bnd, iota, out=seg)` is the natural spelling and is a
     # numpy >= 2.5 spelling only: before that, take/compress wrap `out` in the
@@ -313,15 +371,15 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     # builds the same single index temporary compress builds internally (8 bytes
     # per touched cell, the residual the Day-2 gate accounts for) and writes it
     # straight into the scratch, on every numpy we support.
-    np.copyto(seg, np.flatnonzero(bnd))
+    xp.copyto(seg, xp.flatnonzero(bnd))
 
     # Cell id per segment, taken from `key` rather than from `cell`: both carry
     # the same number, but `key` is int64 like `cells` is, and take demands the
     # two match. `key` is dead after this -- `cell` and `order` are already out
     # of it -- so reusing it costs nothing.
     cells = scratch["cells"][:k]
-    np.take(key, seg, out=cells, mode="clip")
-    np.floor_divide(cells, POINT_RADIX * POINT_RADIX, out=cells)
+    compat.take_clip(xp, key, seg, out=cells)
+    xp.floor_divide(cells, POINT_RADIX * POINT_RADIX, out=cells)
 
     # Gather the payloads into sorted order. `np.take` does NOT widen into the
     # output dtype -- before numpy 2.5 it wraps `out` in the SOURCE dtype, so a
@@ -338,10 +396,10 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     wz = scratch["wz"][:m]
     r = scratch["refl"][:m]
     g = scratch["is_ground"][:m]
-    np.take(z_cm, order, out=z, mode="clip")
-    np.take(w_q, order, out=w, mode="clip")
-    np.take(refl, order, out=r, mode="clip")
-    np.take(is_ground, order, out=g, mode="clip")
+    compat.take_clip(xp, z_cm, order, out=z)
+    compat.take_clip(xp, w_q, order, out=w)
+    compat.take_clip(xp, refl, order, out=r)
+    compat.take_clip(xp, is_ground, order, out=g)
 
     # §3 estimates the height of the GROUND, so a non-ground return is not a
     # weak measurement of it -- it is a measurement of something else. Zeroing
@@ -354,36 +412,39 @@ def scatter_sorted(idx, z_cm, w_q, refl, class_id, is_ground, point_id=None,
     # Multiplying by the bool column rather than masking with `~g` on purpose:
     # `~g` is a temporary, and this path's whole contract is that it allocates
     # nothing. int32 * bool writes back into the int32 buffer in place.
-    np.multiply(w, g, out=w)
+    xp.multiply(w, g, out=w)
 
-    # w peaks at 2^20 and z at 600 cm: the product needs 64 bits and the int32
+    # w peaks at 2^20 and |z| at 450 cm: the product needs 64 bits and the int32
     # inputs would silently wrap without `dtype`, which is the overflow that
     # would look like a plausible map. Buffered per chunk, so no temporary.
-    np.multiply(w, z, out=wz, dtype=np.int64)
+    xp.multiply(w, z, out=wz, dtype=np.int64)
 
     wz_sum, w_sum = scratch["wz_sum"][:k], scratch["w_sum"][:k]
     refl_sum, ceiling = scratch["refl_sum"][:k], scratch["ceiling_cm"][:k]
-    np.add.reduceat(wz, seg, out=wz_sum)
-    np.add.reduceat(w, seg, out=w_sum)
-    np.add.reduceat(r, seg, out=refl_sum)
+    xp.add.reduceat(wz, seg, out=wz_sum)
+    xp.add.reduceat(w, seg, out=w_sum)
+    xp.add.reduceat(r, seg, out=refl_sum)
 
     # `z` is finished as a height column once wz exists, so the ceiling source
     # is written over it rather than into a second buffer of its own.
-    np.copyto(z, CEILING_NONE, where=g)
-    np.minimum.reduceat(z, seg, out=ceiling)
+    xp.copyto(z, CEILING_NONE, where=g)
+    # cupy has no `minimum.reduceat`; compat reduces by segment id with an
+    # atomic min, which is order-independent for the same reason the integer
+    # sums above are. See `gpu/compat.py`.
+    compat.segment_min(xp, z, seg, out=ceiling, n_segments=k)
 
     # Returns per cell are the gaps between segment starts -- no per-point
     # array of ones to reduce over.
     count = scratch["n"][:k]
-    np.subtract(seg[1:], seg[:-1], out=count[:-1], casting="unsafe")
+    xp.subtract(seg[1:], seg[:-1], out=count[:-1], casting="unsafe")
     count[-1] = m - int(seg[-1])
 
     # Class of the lowest-numbered point in each cell: the key sort already put
     # that point first in its segment, so this is a gather, not a reduction.
     class_src = scratch["class_src"][:k]
     out_class = scratch["class_id"][:k]
-    np.take(order, seg, out=class_src, mode="clip")
-    np.take(class_id, class_src, out=out_class, mode="clip")
+    compat.take_clip(xp, order, seg, out=class_src)
+    compat.take_clip(xp, class_id, class_src, out=out_class)
 
     return CellAggregate(cells, wz_sum, w_sum, count, ceiling, refl_sum, out_class)
 
@@ -482,21 +543,43 @@ SORTED_SCRATCH_CELL_FIELDS = (
 )
 
 
-def new_sorted_scratch(max_points: int, n_cells: int | None = None) -> dict:
+def _backend_of(arr):
+    """numpy or cupy, decided by an array rather than by a flag.
+
+    `scatter_sorted` takes no `device` argument on purpose. The scratch is
+    already the thing that had to be allocated on the right device, so it is
+    the honest source of truth, and reading the backend off it means no caller
+    signature changes and the two can never disagree. Checked by module name so
+    that importing cupy is never forced on a CPU-only install.
+    """
+    mod = type(arr).__module__.split(".")[0]
+    if mod == "cupy":
+        import cupy
+        return cupy
+    return np
+
+
+def new_sorted_scratch(max_points: int, n_cells: int | None = None, xp=np) -> dict:
     """Scratch for `scatter_sorted`. Sized by the sensor's point count, not by
     the grid, so it does not grow when the map does.
 
     A frame can touch at most one cell per point, so the aggregate columns are
     capped at `min(max_points, n_cells)` -- still independent of grid size for
     any grid larger than a scan, which every schedule we ship is.
+
+    `xp` selects the backend, and it is the ONLY thing that does:
+    `scatter_sorted` reads the backend off the scratch it is handed rather than
+    taking a `device` argument, so no caller changes and a device run is
+    `new_sorted_scratch(n, xp=cupy)` and nothing else. Pass
+    `allocators.array_module(device)`.
     """
     if max_points > POINT_RADIX:
         raise ValueError(f"max_points {max_points:,} exceeds POINT_RADIX {POINT_RADIX:,}; "
                          "the packed sort key cannot address that many points")
     max_cells = max_points if n_cells is None else min(max_points, n_cells)
-    s = {name: np.zeros(max_points, dtype=dt) for name, dt in SORTED_SCRATCH_POINT_FIELDS}
-    s.update({name: np.zeros(max_cells, dtype=dt) for name, dt in SORTED_SCRATCH_CELL_FIELDS})
-    np.copyto(s["iota"], np.arange(max_points, dtype=np.int64))
+    s = {name: xp.zeros(max_points, dtype=dt) for name, dt in SORTED_SCRATCH_POINT_FIELDS}
+    s.update({name: xp.zeros(max_cells, dtype=dt) for name, dt in SORTED_SCRATCH_CELL_FIELDS})
+    xp.copyto(s["iota"], xp.arange(max_points, dtype=np.int64))
     return s
 
 

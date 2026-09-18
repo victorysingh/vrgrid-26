@@ -78,9 +78,24 @@ All rings remain part of one global **5 cm lattice**, allowing the representatio
 | Cell storage                |                   **12 B** |
 | Memory vs uniform 5 cm 2.5D |            **21.5× lower** |
 | Memory vs dense 5 cm 3D     |             **286× lower** |
-| End-to-end frame latency    |  **89.18 ms p50 / 100.43 p99** |
+| End-to-end frame latency    | **89.18 ms p50 / 100.43 p99** † |
 | Ghost trails                |       **0 / 4,071 frames** |
-| Determinism                 | Design target: **bit-identical map hash** — **not yet achieved**, see below |
+| Determinism                 | **Bit-identical map hash** ‡ |
+
+> ‡ **Determinism is currently qualified, and the qualification is open item D1.**
+> The kernel path — scatter, fuse and the map hash — is bit-identical and
+> CI-gated. **End-to-end replay is not.** `src/perception/ground.py` holds a
+> stateful Patchwork++ singleton, so `test_real_sequence_replay_is_identical`
+> fails: two replays of the same sequence in one process differ by **1,245 of
+> 1,479,013 points**. Until D1 is closed, "bit-identical map hash" is true of the
+> kernel path and false of a full replay. See `OPEN-ITEMS.md` §2.
+
+> † **Quote this with its host attached** — open item D8. The tree currently
+> holds two honest end-to-end figures for the same quantity on different
+> machines: 89.18 / 100.43 ms here, and 108.65 / 127.23 ms in
+> `docs/handover-2026-09-02.md`. One is 0.43 ms over the 100 ms budget and the
+> other 27 ms over. Neither is "the" frame latency until D8 picks one reference
+> host and one command.
 
 The fixed footprint is allocated at startup:
 

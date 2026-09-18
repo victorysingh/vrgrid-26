@@ -127,12 +127,25 @@ is worse than no number, which is why the 3-12% that was briefly written into
 this file, §9.2 and `known-limitations.md` has been taken out rather than
 swapped for its replacement.
 
+⚑ **Settled on real data, 2026-09-17.** The band-restricted reference above
+  is now `reference_map.RingObservations`: per ring, exactly the returns that
+  ring integrated, attributed with the binning function itself, held sparsely
+  so the memory objection no longer applies. Pass it as `reference` and every
+  metric here scores against it (`_compared` asks it `for_ring`). Across all
+  eleven sequences the effect is NOT second order: ring 2's median RMSE is
+  8.82 cm against M* and 2.46 cm against its own returns. What that difference
+  is -- cross-look disagreement, not coarsening -- and why rho ~ 1.03 against
+  it is not a headline, is `known-limitations.md` §9. The synthetic figures
+  above are left as they were measured.
+
 ⚑ And it touches the headline. `known-limitations.md` §2b leads with
 **rho = 1.45 median** at ring 1 over eleven sequences; this fix changes the
 scored population, and rho moves by up to 0.06 per ring on the synthetic
 sequence. **§2b's table should be regenerated with this fix before rho is
 quoted to two decimals.** The finding survives in shape -- 0.06 does not move
 rho out of its band -- but the second decimal is not currently earned.
+*(Regenerated 2026-09-17: ring 1 rho 1.39 [1.16-1.53] on the between-cell
+spread, 1.25 [1.11-1.33] with the within-cell term; §2b.)*
 """
 
 import numpy as np
@@ -170,24 +183,27 @@ def _ring_cells(gm, ring: int):
 
     `ring_of` on the cell centre is the predicate, because it is exactly what
     `slot_of` routes a query with -- pinned in
-    `test_the_scored_set_is_the_set_query_routes_to`. The centre is the
-    convention for a cell straddling a ring boundary; §2.4 already says that
-    boundary wobbles by up to one coarsest cell as the window shifts, so no
-    finer rule would mean anything.
+    `test_the_scored_set_is_the_set_query_routes_to`. Since open item D2 no
+    cell straddles a ring boundary: `ring_of` decides per block, so every
+    point of a cell -- its centre included -- has the cell's ring, and the
+    centre is an exact test rather than a convention.
     """
     buf = gm.buffers[ring]
     ix, iy = window_cells(buf)
     slots = np.arange(buf.slots, dtype=np.int64) + buf.offset
     k = gm.schedule.k(ring)
 
-    serves = ring_of(*_cell_centres_m(gm, ring, ix, iy),
-                     gm.schedule, gm.speed_ms) == ring
+    serves = ring_of(*_cell_centres_m(gm, ring, ix, iy), gm.schedule,
+                     gm.speed_ms, gm.vehicle_xy_m, gm.vehicle_yaw_rad,
+                     gm.buffers) == ring
     return slots[serves], ix[serves] * k, iy[serves] * k
 
 
-def _compared(gm, reference, ring: int, require_observed=True):
+def _compared(gm, reference, ring: int, require_observed=True, within_cell=True):
     """The cells of `ring` that can honestly be scored, with their reference
-    statistics. Returns (slots, n_ref, ref_mean_cm, ref_var_cm2, mine_cm).
+    statistics. Returns (slots, n_ref, ref_mean_cm, ref_var_cm2, mine_cm,
+    ref_returns): `n_ref` counts observed 5 cm cells, `ref_returns` counts the
+    returns in them.
 
     Three conditions, and they are three different questions: `_ring_cells`
     asks whether the ring still answers for the place, `n_ref > 0` whether the
@@ -196,7 +212,13 @@ def _compared(gm, reference, ring: int, require_observed=True):
     """
     slots, i_lo, j_lo = _ring_cells(gm, ring)
     k = gm.schedule.k(ring)
-    n_ref, ref_mean, ref_var = reference.block_stats(i_lo, j_lo, k)
+    # A per-ring reference (`reference_map.RingObservations`) answers for each
+    # ring with only the returns that ring received; M* answers the same for
+    # every ring.
+    if hasattr(reference, "for_ring"):
+        reference = reference.for_ring(ring)
+    n_ref, ref_mean, ref_var = reference.block_stats(i_lo, j_lo, k, within_cell)
+    returns = reference.block_returns(i_lo, j_lo, k)
 
     keep = n_ref > 0
     if require_observed:
@@ -237,7 +259,7 @@ def _compared(gm, reference, ring: int, require_observed=True):
     #   map error.
     return (slots[keep], n_ref[keep], ref_mean[keep], ref_var[keep],
             gm.soa["ground_height"][slots[keep]].astype(np.float64)
-            + getattr(gm, "z_datum_m", 0.0) * 100.0)
+            + getattr(gm, "z_datum_m", 0.0) * 100.0, returns[keep])
 
 
 def height_rmse_per_ring(gm, reference):
@@ -250,13 +272,13 @@ def height_rmse_per_ring(gm, reference):
     """
     out = {}
     for ring in range(len(gm.schedule.rings)):
-        _, _, ref_mean, _, mine = _compared(gm, reference, ring)
+        _, _, ref_mean, _, mine, _ = _compared(gm, reference, ring)
         out[ring] = (float(np.sqrt(np.mean((mine - ref_mean) ** 2)))
                      if mine.size else float("nan"))
     return out
 
 
-def coarsening_ratio_per_ring(gm, reference):
+def coarsening_ratio_per_ring(gm, reference, within_cell: bool = True):
     """⚑ rho = IL / spread, per ring. Math §9.3, eqs. (27)-(28).
 
     The number that expresses the thesis, and the one nobody else in the
@@ -273,10 +295,22 @@ def coarsening_ratio_per_ring(gm, reference):
 
     Returns {ring: {il_cm, bias_cm, spread_cm, rho, n}}.
 
-    Cells whose reference footprint holds a single observation are excluded
-    from rho: their spread is 0 by construction, not by flatness, and dividing
-    by it manufactures an infinite ratio out of thin evidence. They still
-    count toward RMSE, where they are perfectly legitimate.
+    `within_cell=False` scores spread on the variance BETWEEN the reference's
+    5 cm cells only -- the definition before 2026-09-17, and the conservative
+    one, because the within-cell term carries sensor noise and pose jitter as
+    well as terrain and pulls rho toward 1. Ring 0 has no rho under it.
+
+    Cells whose reference footprint holds a single RETURN are excluded from
+    rho: their spread is 0 by construction, not by flatness, and dividing by it
+    manufactures an infinite ratio out of thin evidence. They still count
+    toward RMSE, where they are perfectly legitimate.
+
+    ⚑ RETURNS, not observed 5 cm cells, since 2026-09-17. The guard used to be
+      `n_ref > 1` on cells, and a ring-0 footprint is exactly one cell, so
+      ring 0 had no rho on any sequence while M* held a median of 6-12 returns
+      in each of those cells. `spread` now carries the within-cell variance
+      (`ReferenceMap.block_stats`), so a one-cell footprint with many returns
+      has a real spread and is scored like any other.
 
     ⚑ rho is a RATIO OF AGGREGATES, `rms(IL) / rms(spread)`, not the mean of
       the per-cell ratios. §9.3 defines IL and spread per cell and asks for
@@ -296,8 +330,9 @@ def coarsening_ratio_per_ring(gm, reference):
     """
     out = {}
     for ring in range(len(gm.schedule.rings)):
-        _, n_ref, ref_mean, ref_var, mine = _compared(gm, reference, ring)
-        usable = n_ref > 1
+        _, n_ref, ref_mean, ref_var, mine, returns = _compared(
+            gm, reference, ring, within_cell=within_cell)
+        usable = returns > 1 if within_cell else n_ref > 1
         bias2 = (mine - ref_mean) ** 2
         il2 = bias2 + ref_var
 
@@ -408,7 +443,7 @@ def footprint_coverage_per_ring(gm, reference):
     """
     out = {}
     for ring in range(len(gm.schedule.rings)):
-        _, n_ref, _, _, _ = _compared(gm, reference, ring)
+        _, n_ref, _, _, _, _ = _compared(gm, reference, ring)
         k = gm.schedule.k(ring)
         out[ring] = (float(np.median(n_ref / (k * k))) if n_ref.size
                      else float("nan"))

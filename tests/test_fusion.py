@@ -765,3 +765,54 @@ def test_unknown_beats_free_and_blind_beats_everything():
         assert s[1] == OCC_UNKNOWN, "unobserved must not read OCCUPIED"
         assert s[2] == OCC_FREE, "observed and below threshold"
         assert s[3] == OCC_UNKNOWN, "a blind cell is never anything else"
+
+
+# --- the 8 m band: a clamped height is not a measurement ---------------------
+
+
+def test_out_of_band_is_exactly_the_heights_the_clamp_would_change():
+    from vrgrid.gpu.kernels import Z_MAX_CM, Z_MIN_CM, out_of_band, quantise_height
+
+    rng = np.random.default_rng(3)
+    z = np.concatenate([rng.uniform(-30, 30, 20_000),
+                        np.array([Z_MIN_CM, Z_MAX_CM, Z_MIN_CM - 0.5, Z_MAX_CM + 0.5,
+                                  Z_MIN_CM - 0.51, Z_MAX_CM + 0.51]) / 100.0])
+    for datum in (0.0, -2.0, 17.0):
+        raw = np.rint(z * 100.0 - datum * 100.0) if datum else np.rint(z * 100.0)
+        assert np.array_equal(out_of_band(z, datum),
+                              quantise_height(z, datum).astype(np.float64) != raw)
+
+
+def test_a_ground_return_outside_the_band_does_not_move_the_height():
+    """Seq 08, ring 3: ground 20 m below the band was clamped to its floor and
+    fused as a measurement, dragging cells a metre off. Through `scatter`, a
+    cell holding one in-band and one far-below ground return must fuse the
+    in-band one alone -- and a cell with only the far one keeps no height."""
+    from vrgrid.eval.harness import build_gridmap
+    from vrgrid.grid.fusion import scatter
+
+    gm = build_gridmap(load("5/10/20/40"))
+    pts = np.array([[5.02, 0.02, 0.30], [5.03, 0.03, -20.0],   # same 5 cm cell
+                    [7.02, 0.02, -20.0]])                         # alone
+    agg = scatter(gm, pts, np.zeros(3, np.uint8), np.ones(3, bool))
+    fuse(gm.soa, agg)
+    slots = np.asarray(agg.cells)
+    both, alone = slots[np.argsort(slots)]
+    assert gm.soa["ground_height"][both] == 30
+    assert gm.soa["height_variance"][alone] == 0          # no height evidence
+    assert gm.soa["obs_count"][alone] == 1                # but it was observed
+
+
+def test_rebasing_a_height_out_of_the_band_drops_its_evidence():
+    """A cell at the band's ceiling used to become +5 m after a 1 m datum step
+    and read as a real height ever after (seq 09: 25 ring-3 cells at exactly
+    +5.00 m). Now it keeps a clamped value and loses its variance code."""
+    from vrgrid.gpu.kernels import Z_MAX_CM
+    from vrgrid.gpu.shift import track_datum
+
+    soa = _grid()
+    soa["ground_height"][:4] = [100, Z_MAX_CM, -150, 550]
+    soa["height_variance"][:4] = 170
+    track_datum(soa, 0.0, -1.0)                  # the band moves 1 m down
+    assert list(soa["ground_height"][:4]) == [200, Z_MAX_CM, -50, Z_MAX_CM]
+    assert list(soa["height_variance"][:4]) == [170, 0, 170, 0]

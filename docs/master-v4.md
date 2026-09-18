@@ -379,6 +379,7 @@ If a judge cannot *see* the cells growing with distance, you have hidden your ow
 State these in the report. Naming a limit reads as understanding; being caught by one reads as an oversight.
 
 - **Vertical extent −2 m to +6 m.** Overpasses and multi-storey structures are out of scope.
+  *(2026-09-17: still 8 m, now −3.5 to +4.5 m about a datum that follows the road in 1 m steps — surveyed over all eleven labelled sequences, `known-limitations.md` §11.)*
 - **Blind cone: 3.74 m radius**, not the 1–2 m assumed earlier (`r = h/tan|φ_min|`, h = 1.73, φ = −24.8°). That is **11% of Ring 0** unobservable in any single frame. Mark it **unknown**, never free. Report both the instantaneous blind fraction and the persistent-unknown fraction after ego-motion fills it.
 - **Slow motion is geometrically undetectable beyond ~25 m.** A pedestrian moves 14 cm between scans at 10 Hz; that is smaller than a Ring-2 cell. Beyond 25 m, motion detection is a semantic prior ("that shape is a person, people move"), not a measurement. Say this explicitly.
 - **Negative obstacles: ~8 m for a 30 cm defect** (§1.2).

@@ -167,6 +167,7 @@ class CostMap:
     cost: np.ndarray            # (nx, ny)
     unknown: np.ndarray         # (nx, ny) bool, nothing observed at all
     trav: np.ndarray = None     # (nx, ny) uint8, the §7.1 bitfield
+    z_m: np.ndarray = None      # (nx, ny) planning-cell height, nan where unknown
 
     # ⚑ `unknown` alone is not who pays `w_unknown`. The cost function charges
     #   it for `unknown | TRAV_CONFIDENCE`, and the second term is almost all
@@ -268,7 +269,8 @@ def costmap_from_gridmap(gm, x0_m, y0_m, nx, ny, cell_m=None,
       reference side already stated it. The clearance bit is still in the map
       and still in `query()`; it is this metric that must not use it.
 
-    Heights are combined by observation count and variances by the law of
+    Heights are combined by the footprint area each cell covers -- the same
+    estimator as the reference's block mean -- and variances by the law of
     total variance (§4.2) -- the children measure different *places*, so
     dropping the between-cell term would make a planning cell most confident
     exactly where it straddles a kerb.
@@ -293,24 +295,43 @@ def costmap_from_gridmap(gm, x0_m, y0_m, nx, ny, cell_m=None,
     for i in range(nx):
         for j in range(ny):
             seen = {}
+            area = {}        # samples landing in each distinct cell
             for du in offsets:
                 wx = x0_m + (i + du) * cell_m - vehicle_xy_m[0]
                 for dv in offsets:
                     wy = y0_m + (j + dv) * cell_m - vehicle_xy_m[1]
                     ring, slot = slot_of(gm, wx, wy)
-                    if ring == OUTSIDE or (ring, slot) in seen:
+                    if ring == OUTSIDE:
+                        continue
+                    if (ring, slot) in seen:
+                        area[(ring, slot)] += 1
                         continue
                     q = query(gm, wx, wy)
                     if q.occupancy == OCC_UNKNOWN:
                         continue
                     seen[(ring, slot)] = q
+                    area[(ring, slot)] = 1
 
             if not seen:
                 continue
             qs = list(seen.values())
-            counts = np.array([max(q.confidence, 1) for q in qs], dtype=np.float64)
+            # ⚑ Weighted by the share of the FOOTPRINT each cell covers, not by
+            #   its observation count. The reference side is an area-weighted
+            #   mean -- every observed 5 cm cell of the block counts once -- and
+            #   the samples here are 5 cm apart, so sample hits ARE that area:
+            #   for a 5 cm map the two sides are the same estimator exactly.
+            #   Count weighting was not. A coarse cell clipping one corner of
+            #   the footprint got the weight of all its returns, so a
+            #   neighbour's height leaked in, and where the map lattice beats
+            #   against the 25 cm planning lattice (every 1 m at 20 cm) the leak
+            #   alternated into phantom steps. On seq 07 uniform 20 cm set 23
+            #   slope and 27 step walls on M*'s optimal paths and its R(S) read
+            #   2.237 between 10 cm's 1.519 and 40 cm's 1.667 -- a real spike
+            #   (+0.718 / -0.650 paired, ~8 SE) produced by the metric, not the
+            #   map. Evidence is still counts: `n_tot`, below, decides bit 5.
+            wts = np.array([area[key] for key in seen], dtype=np.float64)
             mus = np.array([q.ground_height for q in qs], dtype=np.float64)
-            wts = counts / counts.sum()
+            wts = wts / wts.sum()
 
             n_tot[i, j] = int(sum(q.confidence for q in qs))
             mu = float((wts * mus).sum())
@@ -320,7 +341,7 @@ def costmap_from_gridmap(gm, x0_m, y0_m, nx, ny, cell_m=None,
             # the between term alone and therefore a LOWER bound -- which is
             # the conservative direction for a roughness threshold.
             var[i, j] = float((wts * (mus - mu) ** 2).sum())
-            cls[i, j] = int(qs[int(np.argmax(counts))].semantic_class)
+            cls[i, j] = int(qs[int(np.argmax(wts))].semantic_class)
             # Roughness and class are per-cell properties, not neighbourhood
             # ones, so OR is the right combiner for them: a rough patch
             # anywhere in the footprint makes the footprint rough.
@@ -344,7 +365,7 @@ def costmap_from_gridmap(gm, x0_m, y0_m, nx, ny, cell_m=None,
     trav |= np.where(n_tot < t["n_min"], TRAV_CONFIDENCE, 0).astype(np.uint8)
 
     return CostMap(cell_m, x0_m, y0_m, _cost_from_bits(trav, unknown, w),
-                   unknown, trav)
+                   unknown, trav, z)
 
 
 def costmap_from_reference(reference, x0_m, y0_m, nx, ny, cell_m=None,
@@ -379,7 +400,10 @@ def costmap_from_reference(reference, x0_m, y0_m, nx, ny, cell_m=None,
             + np.arange(ny)[None, :] * k)
     i_lo, j_lo = np.broadcast_arrays(i_lo, j_lo)
 
-    n, mean, var = reference.block_stats(i_lo, j_lo, k)
+    # Between-cell variance only: the within-cell term is sensor noise as much
+    # as terrain, and the map side of the comparison has no such term (see
+    # `ReferenceMap.block_stats`).
+    n, mean, var = reference.block_stats(i_lo, j_lo, k, within_cell=False)
     unknown = n == 0
     z = np.where(unknown, np.nan, mean / 100.0)      # cm -> m
 
@@ -410,7 +434,7 @@ def costmap_from_reference(reference, x0_m, y0_m, nx, ny, cell_m=None,
     trav |= np.where(n < t["n_min"], TRAV_CONFIDENCE, 0).astype(np.uint8)
 
     return CostMap(cell_m, x0_m, y0_m, _cost_from_bits(trav, unknown, w),
-                   unknown, trav)
+                   unknown, trav, z)
 
 
 def _stencil_1d(n: int, k: int):

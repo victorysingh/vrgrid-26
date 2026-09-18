@@ -11,7 +11,7 @@ rings:
 
 total_cells: 520000   # 6.24 MB at 12 B/cell, 30.8x vs uniform 5 cm
 
-vertical_extent_m: [-2.0, 6.0]
+vertical_extent_m: [-3.5, 4.5]
 hysteresis_eps: 0.1
 
 anisotropy:

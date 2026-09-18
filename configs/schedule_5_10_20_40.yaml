@@ -12,7 +12,7 @@ rings:
 
 total_cells: 745000   # 8.94 MB at 12 B/cell
 
-vertical_extent_m: [-2.0, 6.0]   # overpasses and multi-storey are out of scope
+vertical_extent_m: [-3.5, 4.5]   # overpasses and multi-storey are out of scope
 
 # Split at R_L, merge only at R_L * (1 + eps). Without hysteresis a cell on a
 # boundary splits and merges every frame as the vehicle changes speed, burning

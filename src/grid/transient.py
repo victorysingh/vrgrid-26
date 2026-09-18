@@ -85,8 +85,9 @@ def clear_grid(transient) -> int:
 def ingest(gm, points_m, class_id, moving_mask, points_world_m=None) -> int:
     """Write this frame's dynamic returns into the transient grid.
 
-    Same two frames as `fusion.scatter()` and for the same reasons: the RING
-    comes from the vehicle frame, the CELL from the world frame. The transient
+    Same frames as `fusion.scatter()` and for the same reasons: points are
+    binned in the world frame, ring and cell both, with the vehicle position
+    and heading taken from `gm` (`lattice.ring_of`, open item D2). The transient
     layer shares the grid's geometry exactly (§3.7), so it shares the slot
     index too -- which is what lets `query()` merge the layers without a
     second addressing scheme to keep in sync.
@@ -128,9 +129,9 @@ def ingest(gm, points_m, class_id, moving_mask, points_world_m=None) -> int:
     # two. `bin_points` already returns -1 for OUTSIDE, so the separate
     # `np.where(rings == OUTSIDE, ...)` mask this used to need is gone with it.
     scratch, out = gm.bin_scratch(pts.shape[0])
-    slots = bin_points(pts[:, 0], pts[:, 1], world[:, 0], world[:, 1],
-                       gm.schedule, gm.buffers, out, scratch,
-                       gm.speed_ms).copy()
+    slots = bin_points(world[:, 0], world[:, 1], gm.schedule, gm.buffers, out,
+                       scratch, gm.speed_ms, gm.vehicle_xy_m,
+                       gm.vehicle_yaw_rad).copy()
 
     keep = (slots >= 0) & (slots < gm.transient["flags"].size)
     if not np.any(keep):

@@ -83,11 +83,16 @@ given what is actually in your repo.
 > first two that finished downloading and most development happened against them.
 > Once the full 84.8 GB landed we re-ran the accuracy table across all eleven
 > labelled sequences and we report the distribution rather than our best number:
-> ρ median 1.45, range 1.26 to 1.59, n equals 11.*
+> ρ median 1.39, range 1.16 to 1.53, n equals 11 — and the finest ring, ring 0,
+> at 1.17 once spread counts the variance inside each 5 cm cell.*
 >
 > *And we flag in our own limitations document that 07 and 08 sit at the good end
-> of that range — 1.32 and 1.30 against a median of 1.45 — which is exactly why
+> of that range — 1.24 and 1.22 against a median of 1.39 — which is exactly why
 > we quote the range rather than a sequence.*
+>
+> ⚑ *Regenerated 2026-09-17 (`known-limitations.md` §2b); the 2 Sep figures were
+> 1.45, 1.26–1.59, and 1.32 / 1.30. The between-cell figures are quoted here
+> because they are the conservative ones.*
 >
 > *The one place a genuine hold-out exists is the segmentation model: the FRNet
 > checkpoint was trained on 00 through 10 excluding 08, and every FRNet number we

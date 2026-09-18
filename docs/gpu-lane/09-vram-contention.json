@@ -1,0 +1,170 @@
+{
+ "env": {
+  "gpu": "NVIDIA GeForce RTX 5050 Laptop GPU, 610.57.04, 8151 MiB, 15 MiB",
+  "cuda_runtime": 12090,
+  "cupy": "14.2.0",
+  "torch": "2.11.0+cu128",
+  "seq": "08",
+  "frames": 200,
+  "warmup": 10,
+  "pair_seconds": 40.0
+ },
+ "context": {
+  "config": "context",
+  "pid": 230631,
+  "vram_mib_cupy_context": 86,
+  "vram_mib_cupy_plus_torch_context": 102,
+  "telemetry": {
+   "card_mem_mib_max": 109,
+   "util_pct_mean": 0.0,
+   "temp_c_max": 47,
+   "power_w_max": 28.47,
+   "throttle_reasons_or": "0x0",
+   "thermal_or_hw_slowdown": false
+  }
+ },
+ "grid": {
+  "config": "grid",
+  "pid": 230689,
+  "vram_mib_after_setup": 236,
+  "frame_ms": {
+   "n": 200,
+   "p50": 21.97024099950795,
+   "p99": 27.803516249550672,
+   "max": 198.01617100165458,
+   "mean": 22.854900539896335
+  },
+  "grid_bytes": 10920000,
+  "grid_slots": 910000,
+  "schedule_cells": 745000,
+  "map_static_bytes": 134965248,
+  "perception_bytes": 10114112,
+  "cupy_pool_used": 145080320,
+  "cupy_pool_reserved": 382082048,
+  "vram_mib_process": 594,
+  "telemetry": {
+   "card_mem_mib_max": 617,
+   "util_pct_mean": 8.5,
+   "temp_c_max": 49,
+   "power_w_max": 32.22,
+   "throttle_reasons_or": "0x0",
+   "thermal_or_hw_slowdown": false
+  }
+ },
+ "frnet": {
+  "config": "frnet",
+  "pid": 230788,
+  "frame_ms": {
+   "n": 200,
+   "p50": 91.3270820001344,
+   "p99": 98.68106408855961,
+   "max": 106.78146700229263,
+   "mean": 91.54634064507263
+  },
+  "frnet_params": 10019252,
+  "frnet_weights_bytes": 40188928,
+  "torch_max_allocated": 1599463424,
+  "torch_max_reserved": 4129292288,
+  "vram_mib_process": 4056,
+  "telemetry": {
+   "card_mem_mib_max": 4079,
+   "util_pct_mean": 82.95652173913044,
+   "temp_c_max": 67,
+   "power_w_max": 96.15,
+   "throttle_reasons_or": "0x4",
+   "thermal_or_hw_slowdown": false
+  }
+ },
+ "both": {
+  "config": "both",
+  "pid": 231079,
+  "vram_mib_after_setup": 380,
+  "frame_ms": {
+   "n": 200,
+   "p50": 122.8119900006277,
+   "p99": 130.30283920121278,
+   "max": 284.47022099862806,
+   "mean": 123.53329813495293
+  },
+  "grid_share_ms": {
+   "n": 200,
+   "p50": 23.453342000721022,
+   "p99": 30.078123272469384,
+   "max": 189.8062159998517,
+   "mean": 24.368037510084832
+  },
+  "frnet_share_ms": {
+   "n": 200,
+   "p50": 99.4668820003426,
+   "p99": 105.21408645876362,
+   "max": 123.20223600181635,
+   "mean": 99.1643053999178
+  },
+  "grid_bytes": 10920000,
+  "grid_slots": 910000,
+  "schedule_cells": 745000,
+  "map_static_bytes": 134965248,
+  "perception_bytes": 10114112,
+  "cupy_pool_used": 145080320,
+  "cupy_pool_reserved": 382082048,
+  "frnet_params": 10019252,
+  "frnet_weights_bytes": 40188928,
+  "torch_max_allocated": 1599463424,
+  "torch_max_reserved": 4129292288,
+  "vram_mib_process": 4564,
+  "telemetry": {
+   "card_mem_mib_max": 4587,
+   "util_pct_mean": 73.13333333333334,
+   "temp_c_max": 69,
+   "power_w_max": 84.5,
+   "throttle_reasons_or": "0x4",
+   "thermal_or_hw_slowdown": false
+  }
+ },
+ "pair": {
+  "grid": {
+   "config": "grid",
+   "pid": 231447,
+   "vram_mib_after_setup": 236,
+   "frame_ms": {
+    "n": 749,
+    "p50": 52.775801999814576,
+    "p99": 69.09813947975636,
+    "max": 382.89945399810676,
+    "mean": 53.45323157682156
+   },
+   "grid_bytes": 10920000,
+   "grid_slots": 910000,
+   "schedule_cells": 745000,
+   "map_static_bytes": 134965248,
+   "perception_bytes": 10114112,
+   "cupy_pool_used": 145080320,
+   "cupy_pool_reserved": 414162944,
+   "vram_mib_process": 638
+  },
+  "frnet": {
+   "config": "frnet",
+   "pid": 231448,
+   "frame_ms": {
+    "n": 378,
+    "p50": 104.20654749941605,
+    "p99": 132.08426420944306,
+    "max": 143.07099399957224,
+    "mean": 105.90749076725352
+   },
+   "frnet_params": 10019252,
+   "frnet_weights_bytes": 40188928,
+   "torch_max_allocated": 1599463424,
+   "torch_max_reserved": 4129292288,
+   "vram_mib_process": 4056
+  },
+  "telemetry": {
+   "card_mem_mib_max": 4722,
+   "util_pct_mean": 90.46666666666667,
+   "temp_c_max": 76,
+   "power_w_max": 96.1,
+   "throttle_reasons_or": "0x4",
+   "thermal_or_hw_slowdown": false
+  }
+ }
+}

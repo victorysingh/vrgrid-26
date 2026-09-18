@@ -47,7 +47,7 @@ from vrgrid.gpu.allocators import (  # noqa: F401
     resident_bytes,
 )
 
-# 200 x 200 m footprint, -2 to +6 m vertical extent, 5 cm base cell. These
+# 200 x 200 m footprint, 8 m vertical extent (-3.5 to +4.5 m since 2026-09-17), 5 cm base cell. These
 # match scripts/memory_table.py and math §11 -- if they ever disagree, the
 # table is quoting a baseline we do not allocate, which is the one thing the
 # gate review said we must never do.

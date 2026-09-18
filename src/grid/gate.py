@@ -178,6 +178,160 @@ def apply(gm, slots, vehicle_speed_ms: float = 0.0, thresholds=None,
           corridor_mask=None, grad_z=None) -> dict:
     """Run the gate over this frame's touched cells. Master v4 §3.4.
 
+    Semantics are exactly `apply_reference` -- read it for why each step
+    exists, including E1's release-first order -- and this is the same
+    decisions made cheaply. Measured on real seq 08 the per-cell version cost
+    ~50 ms a frame: the pool is full after a few frames and then refuses
+    ~3,500 requests a frame, and every refusal paid for a full owner-table
+    scan in `find`, another in the free search, and an `argmin` in eviction,
+    plus up to 512 scalar `migrate_ring` calls in the release.
+
+    What changed, and why none of it changes a result:
+      * release asks `migrate_ring_many` once for all held blocks -- releases
+        are independent of each other;
+      * ring, centre, dynamism and priority are computed for every fired cell
+        at once, with the same float operations the scalar helpers use;
+      * the request loop keeps its order (acquisition and eviction depend on
+        it) but finds blocks through a dict mirroring the owner table, takes
+        free blocks lowest-index-first as `np.flatnonzero(...)[0]` did, and
+        re-runs `argmin` over the scores only after a score has changed --
+        a refusal changes nothing, so the victim it would have found is the
+        one already cached.
+    `test_apply_matches_the_reference` compares pool, cells, flags and
+    counts frame by frame, including a pool small enough to evict and refuse.
+    """
+    from vrgrid.grid.lattice import migrate_ring_many
+
+    _, th = _config(thresholds)
+    pool = gm.pool
+    if pool is None:
+        return {"released": 0, "fired": 0, "acquired": 0, "refused": 0, "unfit": 0}
+
+    def current_rings(rings, owner_slots):
+        x_m, y_m = _cell_centres(gm, rings, owner_slots)
+        return migrate_ring_many(x_m, y_m, gm.schedule, rings, vehicle_speed_ms,
+                                 gm.vehicle_xy_m, gm.vehicle_yaw_rad, gm.buffers)
+
+    released = pool.release_overtaken_many(current_rings)
+
+    slots = np.asarray(slots, dtype=np.int64)
+    fires = candidates(gm, slots, th)
+    fired = slots[fires]
+    result = {"released": released, "fired": int(fires.sum()),
+              "acquired": 0, "refused": 0, "unfit": 0}
+    if fired.size == 0:
+        return result
+
+    rings = _rings_of_slots(gm, fired)
+    x_m, y_m = _cell_centres(gm, rings, fired)
+    scores = _priorities(gm, fired, x_m, y_m, vehicle_speed_ms)
+    unfit_ring = np.array([pool.levels_available(gm.schedule, r) < 1 if r >= 1 else False
+                           for r in range(len(gm.allocation.rings))])
+
+    owner = {(int(r), int(sl)): int(b)
+             for b, (r, sl) in enumerate(zip(pool.owner_ring, pool.owner_slot)) if r != FREE}
+    free = sorted(int(b) for b in np.flatnonzero(pool.owner_ring == FREE))
+    victim = None                       # cached argmin(score); None = stale
+
+    acquired = refused = unfit = 0
+    for i in range(fired.size):
+        ring = int(rings[i])
+        if ring < 1:
+            continue
+        slot = int(fired[i])
+        if corridor_mask is not None and not corridor_mask(ring, slot):
+            continue
+        if unfit_ring[ring]:
+            unfit += 1
+            continue
+        score = float(scores[i])
+
+        block = owner.get((ring, slot), FREE)
+        if block != FREE:                               # acquire(): existing
+            pool.score[block] = score
+            victim = None
+        else:
+            if free:
+                block = free.pop(0)
+            else:
+                if victim is None:
+                    victim = int(np.argmin(pool.score))
+                if pool.score[victim] >= score:
+                    refused += 1
+                    continue
+                block = victim
+                del owner[(int(pool.owner_ring[block]), int(pool.owner_slot[block]))]
+                pool.release(block)
+            pool.owner_ring[block] = ring
+            pool.owner_slot[block] = slot
+            pool.levels[block] = 1
+            pool.score[block] = score
+            pool._clear(block)
+            owner[(ring, slot)] = block
+            victim = None
+        _fill(gm, pool, block, ring, slot, grad_z)
+        gm.soa["flags"][slot] |= 2         # FLAG_REFINED
+        acquired += 1
+
+    result.update(acquired=acquired, refused=refused, unfit=unfit)
+    return result
+
+
+def _rings_of_slots(gm, slots) -> np.ndarray:
+    """`ring_of_slot` for many slots: the last ring whose offset is <= slot."""
+    offsets = np.array([r.offset for r in gm.allocation.rings], dtype=np.int64)
+    return np.maximum(np.searchsorted(offsets, slots, side="right") - 1, 0)
+
+
+def _cell_centres(gm, rings, slots):
+    """`_cell_centre` for many cells, with the same integer and float steps."""
+    rings = np.asarray(rings, dtype=np.int64)
+    slots = np.asarray(slots, dtype=np.int64)
+    x = np.empty(slots.size)
+    y = np.empty(slots.size)
+    for level, buf in enumerate(gm.buffers):
+        sel = rings == level
+        if not sel.any():
+            continue
+        local = slots[sel] - buf.offset
+        side = buf.side
+        sx, sy = local % side, local // side
+        ix = buf.x0 + (sx - buf.x0) % side
+        iy = buf.y0 + (sy - buf.y0) % side
+        cell_m = gm.schedule.rings[level].cell_m
+        x[sel] = (ix + 0.5) * cell_m - gm.vehicle_xy_m[0]
+        y[sel] = (iy + 0.5) * cell_m - gm.vehicle_xy_m[1]
+    return x, y
+
+
+def _priorities(gm, slots, x_m, y_m, speed_ms: float) -> np.ndarray:
+    """`pool.priority(hypot, _is_dynamic, _time_to_collision)` elementwise."""
+    from vrgrid.grid.pool import CLOSENESS_REF_M, DYNAMIC_GAIN, TTC_REF_S, URGENCY_FLOOR
+
+    r = np.hypot(x_m, y_m)
+    closeness = 1.0 / (1.0 + np.maximum(r, 0.0) / CLOSENESS_REF_M)
+    dynamic = np.zeros(slots.size, dtype=bool)
+    if gm.transient is not None:
+        inside = slots < gm.transient["flags"].size
+        dynamic[inside] = (gm.transient["flags"][slots[inside]] & FLAG_DYNAMIC) != 0
+    dynamism = 1.0 + np.where(dynamic, DYNAMIC_GAIN, 0.0)
+    if speed_ms <= 1e-6:
+        ttc = np.full(slots.size, np.inf)
+    else:
+        ttc = np.where(x_m <= 0.0, np.inf, x_m / speed_ms)
+    urgency = np.where(ttc >= 0, np.maximum(1.0 / (1.0 + ttc / TTC_REF_S), URGENCY_FLOOR), 1.0)
+    return closeness * dynamism * urgency
+
+
+def apply_reference(gm, slots, vehicle_speed_ms: float = 0.0, thresholds=None,
+          corridor_mask=None, grad_z=None) -> dict:
+    """The per-cell reference `apply` is pinned against. Master v4 §3.4.
+
+    Kept verbatim so `test_apply_matches_the_reference` can prove the fast
+    path changes nothing: same pool, same cells, same flags, same counts.
+
+    Run the gate over this frame's touched cells.
+
     Order matters and it is the E1 fix: **release first, then acquire.** A
     block whose cell has migrated inward is buying resolution the schedule now
     provides free, and holding it while new requests are refused is exactly
@@ -230,7 +384,9 @@ def apply(gm, slots, vehicle_speed_ms: float = 0.0, thresholds=None,
 
     released = pool.release_overtaken(
         lambda ring, slot: migrate_ring(*_cell_centre(gm, ring, slot),
-                                        gm.schedule, ring, vehicle_speed_ms))
+                                        gm.schedule, ring, vehicle_speed_ms,
+                                        gm.vehicle_xy_m, gm.vehicle_yaw_rad,
+                                        gm.buffers))
 
     slots = np.asarray(slots, dtype=np.int64)
     fires = candidates(gm, slots, th)

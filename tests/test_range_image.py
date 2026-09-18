@@ -200,3 +200,18 @@ def test_real_scan_out_of_fov_fraction_is_small():
     assert stats["out_of_fov_fraction"] < 0.10
     assert stats["n_clamped_above"] > stats["n_clamped_below"]
     assert stats["fill_fraction"] > 0.5  # was ~0.15 with the broken binning
+
+
+def test_sensor_config_is_parsed_once_and_copied_per_caller():
+    """project() asks for the sensor config on every frame, and re-parsing the
+    YAML there cost 5.4 ms a frame (profiled, seq 00). It is cached per path --
+    and every caller gets its own copy, so a caller that edits the dict cannot
+    change what the next frame reads."""
+    from vrgrid.perception import range_image
+
+    range_image._parse_sensor_config.cache_clear()
+    a = range_image.load_sensor_config()
+    a["num_rings"] = -1
+    b = range_image.load_sensor_config()
+    assert b["num_rings"] != -1
+    assert range_image._parse_sensor_config.cache_info().misses == 1

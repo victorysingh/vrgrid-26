@@ -137,26 +137,39 @@ def test_the_scene_actually_contains_walls(scene):
         "M* has no impassable cells, so the agreement test above is vacuous")
 
 
-def test_a_coarse_uniform_grid_is_the_one_that_smooths_walls_away(scene):
-    """The result the ablation exists to show, and the direction matters.
+def test_a_coarse_uniform_grid_loses_hazard_depth_not_the_hazard(scene):
+    """Where coarsening shows at M*'s walls, and the direction matters.
 
-    Once both sides are on the planning lattice, the schedule that MISSES M*'s
-    hazards is the coarse uniform one -- it averages a 12 cm kerb into its
-    20 cm cells until the step falls under `s_max`. That is the physically
-    correct answer and it used to be inverted: the fine map was the one
-    reported as disagreeing with the reference, because it was the only one
-    resolving the kerb at all.
+    The scene's walls are the rims of its 30 cm pothole; the 12 cm kerb is
+    below `s_max` at every cell size, so it is not a wall on either side. Both
+    maps must find every one of those walls, and the coarse uniform grid is
+    the one that must carry the larger height error at them: 20 cm cells read
+    the pothole shallower than 5 cm cells do. That is information loss, and it
+    is measured rather than declared.
+
+    ⚑ This used to assert that uniform 20 cm MISSED more walls than the
+      variable schedule. It did -- because `costmap_from_gridmap` weighted
+      each map cell by its observation count, not by the share of the
+      footprint it covers, and a road cell clipping the edge of a pothole's
+      planning cell dragged the pothole above `s_max`. That leak was also
+      seq 07's uniform 20 cm regret spike (`known-limitations.md` §10). With
+      area weighting -- the reference's own estimator -- neither map misses
+      a wall, and the coarse grid's loss shows up where it physically is:
+      in the depth.
     """
     star, mine = scene
     mask = common_support(*mine.values())
-    blocked_star = ~np.isfinite(star.cost) & mask
-
-    fine_missed = int((blocked_star & np.isfinite(mine["5/10/20/40"].cost)).sum())
-    coarse_missed = int((blocked_star & np.isfinite(mine["uniform_20cm"].cost)).sum())
-    assert coarse_missed > fine_missed, (
-        f"uniform 20 cm missed {coarse_missed} of M*'s walls and the variable "
-        f"schedule missed {fine_missed} -- the coarse grid is supposed to be "
-        "the one that cannot see them")
+    walls = ~np.isfinite(star.cost) & mask
+    assert walls.sum() > 0
+    depth_err = {}
+    for name, m in mine.items():
+        missed = int((walls & np.isfinite(m.cost)).sum())
+        assert missed == 0, f"{name} missed {missed} of M*'s {int(walls.sum())} walls"
+        depth_err[name] = float(np.nanmean(np.abs(m.z_m[walls] - star.z_m[walls])))
+    assert depth_err["uniform_20cm"] > depth_err["5/10/20/40"] + 0.01, (
+        f"at M*'s walls uniform 20 cm is off by {depth_err['uniform_20cm'] * 100:.1f} cm "
+        f"and 5/10/20/40 by {depth_err['5/10/20/40'] * 100:.1f} cm -- the coarse grid "
+        "is supposed to be the one that loses the hazard's depth")
 
 
 def test_the_predicate_is_the_same_on_both_sides(scene):

@@ -13,6 +13,7 @@ from vrgrid.perception.ground import (
     GROUND_METHOD_FALLBACK,
     GROUND_METHOD_PATCHWORKPP,
     ground_from_semantics,
+    reset_estimator,
     reset_fallback_warning,
     segment_ground,
     segment_ground_or_fallback,
@@ -133,3 +134,54 @@ def test_patchworkpp_split_agrees_with_semantic_classes():
     valid = sem >= 0
     agreement = (ground[valid] == ground_from_semantics(sem)[valid]).mean()
     assert agreement > 0.90, f"agreement {agreement:.2%}"
+
+
+# --- one Patchwork++ state per run -----------------------------------------
+
+
+def _street_scans(n=4):
+    """A few synthetic sweeps: a ground plane 1.73 m down plus scattered
+    objects, varied per scan so the adaptive thresholds have something to
+    adapt to."""
+    scans = []
+    for i in range(n):
+        rng = np.random.default_rng(i)
+        r = rng.uniform(3.0, 40.0, 6000)
+        a = rng.uniform(-np.pi, np.pi, 6000)
+        ground = np.column_stack([r * np.cos(a), r * np.sin(a),
+                                  rng.normal(-1.73, 0.03 + 0.02 * i, 6000)])
+        objects = np.column_stack([rng.uniform(-30, 30, 2000), rng.uniform(-30, 30, 2000),
+                                   rng.uniform(-1.5, 2.5, 2000)])
+        pts = np.vstack([ground, objects])
+        scans.append(np.column_stack([pts, np.full(len(pts), 0.3)]))
+    return scans
+
+
+@needs_pw
+def test_reset_estimator_drops_the_shared_patchworkpp_state():
+    scan = _street_scans(1)[0]
+    segment_ground(scan)
+    first = ground_mod._estimator
+    assert first is not None
+    reset_estimator()
+    assert ground_mod._estimator is None
+    segment_ground(scan)
+    assert ground_mod._estimator is not first
+
+
+@needs_pw
+def test_runs_with_a_reset_between_them_segment_identically():
+    """Patchwork++ adapts from the scans it has seen, so one estimator shared
+    by two runs made the second run's ground differ from the first -- the
+    whole-pipeline determinism gate hashed two maps for one input. With a
+    reset at the start of each run, two runs over the same scans must return
+    the same masks, scan for scan."""
+    scans = _street_scans()
+
+    def run():
+        reset_estimator()
+        return [segment_ground(s) for s in scans]
+
+    first, second = run(), run()
+    for a, b in zip(first, second):
+        assert np.array_equal(a, b)

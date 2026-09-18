@@ -100,6 +100,22 @@ def _get_estimator():
     return _estimator
 
 
+def reset_estimator() -> None:
+    """Drop the shared Patchwork++ estimator; the next scan builds a fresh one.
+
+    Call at the start of every sequence run. Patchwork++ adapts its ground
+    thresholds from the scans it has already seen, so the one estimator this
+    module keeps carries state from one run into the next. Two runs of the
+    same 50 frames of seq 08 in one process hashed DIFFERENT maps
+    (`test_real_sequence_replay_is_identical`), while two separate processes
+    hashed identical ones -- a run's map depended on what ran before it in the
+    process. Resetting per run makes every run equal a fresh process. Within a
+    run the estimator is still reused across frames, as it always was.
+    """
+    global _estimator
+    _estimator = None
+
+
 def segment_ground(points: np.ndarray) -> np.ndarray:
     """Ground / non-ground split for one scan.
 

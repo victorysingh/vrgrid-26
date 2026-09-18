@@ -12,6 +12,7 @@ from vrgrid.gpu.kernels import (
     SORTED_SCRATCH_POINT_FIELDS,
     WEIGHT_MAX,
     Z_MAX_CM,
+    Z_MIN_CM,
     CellAggregate,
     grid_bytes,
     measurement_variance_cm2,
@@ -74,11 +75,22 @@ def test_weights_are_integers_and_never_zero():
 
 
 def test_heights_clamp_to_the_vertical_extent():
-    """-2 to +6 m. Overpasses are out of scope, and an unclamped value would
-    silently wrap in int16."""
-    z = quantise_height(np.array([-9.0, -2.0, 0.0, 6.0, 9.0]))
+    """-3.5 to +4.5 m about the datum. Overpasses are out of scope, and an
+    unclamped value would silently wrap in int16."""
+    z = quantise_height(np.array([-9.0, -3.5, 0.0, 4.5, 9.0]))
     assert z.dtype == np.int16
-    assert z.tolist() == [-200, -200, 0, 600, 600]
+    assert z.tolist() == [-350, -350, 0, 450, 450]
+
+
+def test_the_band_is_the_one_the_schedules_declare():
+    """The clamp and `vertical_extent_m` are one number in two places; the
+    dense-3D baseline and the memory claim are computed from the second."""
+    from vrgrid.gpu.kernels import Z_MAX_CM, Z_MIN_CM
+    from vrgrid.grid.schedule import load
+
+    for name in ("5/10/20/40", "5/10/50"):
+        assert load(name).vertical_extent_m == (Z_MIN_CM / 100.0, Z_MAX_CM / 100.0)
+    assert Z_MAX_CM - Z_MIN_CM == 800, "8 m: every memory figure assumes it"
 
 
 # --- aggregation -------------------------------------------------------------
@@ -447,7 +459,7 @@ def test_the_weighted_mean_rounds_symmetrically_about_zero():
     entire ground plane, against a §3.2 noise floor of 0.8 cm at 5 m.
     """
     w = 4000
-    z_cm = np.arange(-200, 601)
+    z_cm = np.arange(Z_MIN_CM, Z_MAX_CM + 1)
     agg = CellAggregate(
         np.arange(z_cm.size, dtype=np.int64), (z_cm * w).astype(np.int64),
         np.full(z_cm.size, w, np.int64), np.ones(z_cm.size, np.int32),
@@ -472,3 +484,126 @@ def test_the_mean_is_a_mirror_image_across_zero(wz_sum, expected):
         np.zeros(1, np.uint8),
     )
     assert int(agg.mean_height_cm()[0]) == expected
+
+
+# --- the port's overflow bound, asserted rather than reasoned ---------------
+# `docs/gpu-lane/03-CUDA-PORT-PLAN.md` §2 warns that int32 saturation is a real
+# failure and a silent one, and §9 asks for the bound to live in code. §3 of
+# `docs/gpu-lane/05-FLOAT-AUDIT.md` has the measured version of what follows.
+
+
+def test_the_weight_ceiling_is_never_reachable():
+    """`WEIGHT_MAX` is a clip, not a value the physics can produce.
+
+    This matters because the accumulator widths in `kernels.py` are justified
+    with "w_q up to 2^20", which is the ceiling. Reasoning from the ceiling
+    says int32 `w_sum` overflows at 2048 returns in one cell; reasoning from
+    what `measurement_variance_cm2` can actually return says 2.5 million. The
+    difference is the whole safety margin, so pin the real bound.
+    """
+    from vrgrid.gpu.kernels import measurement_variance_cm2
+
+    # cos_incidence = 1.0 is the best case: the function divides by cos^2, so
+    # any real grazing angle only makes variance larger and the weight smaller.
+    r = np.geomspace(0.05, 120.0, 200_000)
+    w = quantise_weight(measurement_variance_cm2(r))
+
+    assert w.max() < WEIGHT_MAX // 1000, (
+        f"achievable weight {w.max()} is within 1000x of the WEIGHT_MAX clip "
+        f"{WEIGHT_MAX}; the width justification in kernels.py assumes it is not"
+    )
+    # The variance floor sits in the near field, where the 1/r^2 range term and
+    # the r^2 angular term cross. Guard the value, not just the ratio.
+    assert 500 <= int(w.max()) <= 2000
+
+
+def test_a_whole_frame_in_one_cell_does_not_overflow_int32():
+    """The adversarial bound, not the observed one.
+
+    Sequence 08 peaks at 123 returns in a cell, but the bound that has to hold
+    is every return of a frame landing in one cell -- that is the case a
+    silent wrap would be found in the field rather than here.
+    """
+    from vrgrid.gpu.kernels import measurement_variance_cm2
+
+    frame_returns = 130_000          # seq 08 runs ~120k; round up
+    max_w = int(quantise_weight(measurement_variance_cm2(
+        np.geomspace(0.05, 120.0, 200_000))).max())
+    max_abs_z_cm = 800               # the vertical band is 8 m
+
+    assert frame_returns * max_w < np.iinfo(np.int32).max, (
+        "w_sum can wrap int32; the atomic path stores it as int32"
+    )
+    # wz_sum is int64 precisely because this product does NOT fit int32.
+    assert frame_returns * max_w * max_abs_z_cm > np.iinfo(np.int32).max
+    assert frame_returns * max_w * max_abs_z_cm < np.iinfo(np.int64).max
+
+
+# --- scatter_sorted on device -----------------------------------------------
+# The port's contract is not "it runs on a GPU", it is "it returns the same
+# bytes the CPU returns". These assert that, because a device path that agrees
+# to within a rounding error would quietly break the CI-blocking determinism
+# gate and the map hash with it.
+
+
+def _cupy_or_skip():
+    """See tests/test_gpu_compat.py for why all three states are handled."""
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        pytest.skip(f"cupy unavailable: {exc}")
+    try:
+        cp.zeros(1) + 1
+    except Exception as exc:                                      # noqa: BLE001
+        pytest.skip(f"cupy present but no usable device: {type(exc).__name__}")
+    return cp
+
+
+_AGG_COLUMNS = ("cells", "wz_sum", "w_sum", "n", "ceiling_cm", "refl_sum", "class_id")
+
+
+def _random_frame(n=40_000, cells=12_000, seed=42):
+    rng = np.random.default_rng(seed)
+    return (rng.integers(-1, cells, n).astype(np.int64),      # -1 exercises the drop path
+            rng.integers(-800, 800, n).astype(np.int16),
+            rng.integers(1, 848, n).astype(np.int32),         # 848 is the achievable max weight
+            rng.integers(0, 255, n).astype(np.int32),
+            rng.integers(0, 19, n).astype(np.uint8),
+            rng.random(n) < 0.55), n, cells
+
+
+def test_scatter_sorted_on_device_is_bit_identical_to_cpu():
+    cp = _cupy_or_skip()
+    frame, n, cells = _random_frame()
+
+    cpu = scatter_sorted(*frame, scratch=new_sorted_scratch(n, cells, xp=np))
+    dev = [cp.asarray(a) for a in frame]
+    gpu = scatter_sorted(*dev, scratch=new_sorted_scratch(n, cells, xp=cp))
+
+    assert len(cpu.cells) == len(gpu.cells) > 0
+    for name in _AGG_COLUMNS:
+        a, b = getattr(cpu, name), getattr(gpu, name).get()
+        assert a.dtype == b.dtype, f"{name}: dtype drifted, {a.dtype} vs {b.dtype}"
+        assert np.array_equal(a, b), f"{name}: device result differs from CPU"
+    # The column the map actually consumes, which rounds in integers.
+    assert np.array_equal(cpu.mean_height_cm(), gpu.mean_height_cm().get())
+
+
+def test_scatter_sorted_is_reproducible_on_device():
+    """Integer reductions are order-independent, so repeated runs must agree
+    exactly however the scheduler interleaves them. This is the claim the whole
+    GPU cycle rests on, checked on the real kernel rather than a microbenchmark.
+    """
+    cp = _cupy_or_skip()
+    frame, n, cells = _random_frame(seed=7)
+    dev = [cp.asarray(a) for a in frame]
+    scratch = new_sorted_scratch(n, cells, xp=cp)
+
+    first = None
+    for run in range(10):
+        agg = scatter_sorted(*dev, scratch=scratch)
+        cp.cuda.Stream.null.synchronize()
+        got = tuple(getattr(agg, c).get().tobytes() for c in _AGG_COLUMNS)
+        if first is None:
+            first = got
+        assert got == first, f"scatter_sorted diverged on device at run {run}"

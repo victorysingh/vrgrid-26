@@ -43,6 +43,7 @@ spike -- a wrong FOV in the config, or points in the wrong frame -- is visible.
 On KITTI 00 the clamp-above fraction is ~4-7%; a warning fires above 15%.
 """
 
+import functools
 import warnings
 from pathlib import Path
 
@@ -55,10 +56,22 @@ OUT_OF_FOV_WARN_FRAC = 0.15
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "configs"
 
 
-def load_sensor_config(config_path: str | Path = CONFIG_DIR / "frnet.yaml") -> dict:
+@functools.lru_cache(maxsize=8)
+def _parse_sensor_config(config_path: str) -> dict:
     with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f)
-    return cfg["sensor"]
+        return yaml.safe_load(f)["sensor"]
+
+
+def load_sensor_config(config_path: str | Path = CONFIG_DIR / "frnet.yaml") -> dict:
+    """The `sensor` block of the config, parsed once per path.
+
+    `project()` calls this on every frame when it is not handed a config, and
+    re-parsing the YAML there cost 5.4 ms a frame (profiled on seq 00) for a
+    file that does not change during a run. Each caller gets its own shallow
+    copy -- the values are scalars -- so a caller that edits the dict cannot
+    change what the next frame reads.
+    """
+    return dict(_parse_sensor_config(str(config_path)))
 
 
 def bin_widths(sensor_cfg: dict) -> tuple[float, float]:

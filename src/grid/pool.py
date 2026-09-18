@@ -253,6 +253,21 @@ class RefinementPool:
                 released += 1
         return released
 
+    def release_overtaken_many(self, current_rings) -> int:
+        """`release_overtaken` with the answers precomputed: `current_rings(rings,
+        slots) -> array` is asked once, for every held block in block order,
+        instead of once per block. Releases do not interact, so the result is
+        the same set of released blocks as the per-block loop."""
+        held = np.flatnonzero(self.owner_ring != FREE)
+        if held.size == 0:
+            return 0
+        rings = self.owner_ring[held].astype(np.int64)
+        now = np.asarray(current_rings(rings, self.owner_slot[held]), dtype=np.int64)
+        done = held[now <= rings - self.levels[held].astype(np.int64)]
+        for block in done:
+            self.release(int(block))
+        return int(done.size)
+
     def bytes_used(self) -> int:
         """Fixed, and the number the memory table quotes: 512 x 16 x 12 B."""
         return sum(a.nbytes for a in self.cells.values())

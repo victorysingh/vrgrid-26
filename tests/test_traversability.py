@@ -438,3 +438,39 @@ def test_the_step_bit_reads_over_the_baseline_not_the_cell():
     assert max(steps_m.values()) - min(steps_m.values()) <= 0.03, steps_m
     assert one_cell_m[0.25] > 4 * one_cell_m[0.05], (
         f"one-cell steps must scale with the cell: {one_cell_m}")
+
+
+# --- the fast bitfield is the reference, bit for bit --------------------------
+
+
+@pytest.mark.parametrize("baseline", [None, 0.5])
+@pytest.mark.parametrize("side,cell_m", [(40, 0.05), (33, 0.10), (25, 0.20), (17, 0.40)])
+def test_bitfield_matches_the_reference(side, cell_m, baseline):
+    """`bitfield` replaced an `exp` and an `isin` over every cell with lookup
+    tables and cached stencils. Random fields over the whole range of every
+    input -- heights both sides of the datum, every variance code, every
+    packed class byte, thin and thick counts, ceilings above and below the
+    vehicle height -- and odd window sides, so the one-sided border and
+    clipped stencil are exercised."""
+    import copy
+
+    from vrgrid.grid.traversability import bitfield_reference
+    th = copy.deepcopy(load_thresholds())
+    th["traversability"]["baseline_m"] = baseline
+    rng = np.random.default_rng(side)
+    n = side * side
+    soa = {
+        "ground_height": rng.integers(-350, 450, n).astype(np.int16),
+        "ceiling_height": np.where(rng.random(n) < 0.3, np.int16(32767),
+                                   rng.integers(-350, 450, n)).astype(np.int16),
+        "height_variance": rng.integers(0, 256, n).astype(np.uint8),
+        "obs_count": rng.integers(0, 6, n).astype(np.uint8),
+        "semantic_class": rng.integers(0, 256, n).astype(np.uint8),
+    }
+    # smooth patches too, so the slope and step bits are not all set
+    soa["ground_height"][: n // 2] = (np.arange(n // 2) % side).astype(np.int16)
+    got = bitfield(soa, slice(None), side, cell_m, th)
+    want = bitfield_reference(soa, slice(None), side, cell_m, th)
+    assert np.array_equal(got, want)
+    for bit in (1, 2, 4, 8, 16, 32):
+        assert (want & bit).any() and ((want & bit) == 0).any(), f"bit {bit} not exercised"
