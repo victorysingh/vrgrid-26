@@ -35,8 +35,12 @@ EXEMPT = {ROOT / "src" / "perception" / "ground.py"}
 # again in D8's 4.4x variance note). It warms up with one `segment_ground` call
 # and then benches `reps=3` over the same scans without ever resetting, so reps 2
 # and 3 start from state rep 1 left behind -- which a real run never does.
-# Editing the harness would change the provenance of a published number, so it is
-# logged as its own open item (OPEN-ITEMS R-k) for a deliberate pass.
+# Editing the harness would change the provenance of a published number, so it was
+# logged as its own item and measured instead of patched. OPEN-ITEMS R-k is now
+# CLOSED: the carry-over is real but immaterial -- agreement 96.5% either way
+# (+0.07 points), masks moved 0.2379% of points, and resetting per rep cost
+# +0.14 ms (0.7%), inside the published configuration's own spread. The exemption
+# is therefore permanent and deliberate, not a to-do.
 # This list must not grow: a NEW file here means a new entry point forgot.
 KNOWN_UNRESET = {"reports/harnesses/ground_cost.py"}
 
