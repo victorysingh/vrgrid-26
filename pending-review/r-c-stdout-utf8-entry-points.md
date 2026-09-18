@@ -11,10 +11,23 @@ avoids both problems that doc found with its helper-module version (Candidate B)
 
 ## Still not covered
 
-- **`frnet_fast_scatter.py` and `gen_demo_rrds.py` are patched but were not executed.** One
-  runs an equivalence check and a benchmark on start, the other writes demo `.rrd` files. They
-  passed ruff and `ast.parse`, and the inserted block is identical to the other 18, but neither
-  was run.
+- ~~**`frnet_fast_scatter.py` and `gen_demo_rrds.py` are patched but were not executed.**~~
+  **[2026-09-18] CLOSED — both executed, patched and unpatched, in a throwaway worktree.**
+  `gen_demo_rrds.py` (with a filter matching no shot, so it exercises the print path without
+  writing 4.7 GB): stdout **byte-identical**, exit 0 both ways. `frnet_fast_scatter.py`
+  standalone (the equivalence check plus the benchmark): identical once the benchmark's **own**
+  ms/speedup figures are normalised — those vary run to run (`scatter_max` 3655.2 vs 3928.5 ms)
+  and are the only differing lines; the verification text matches exactly. **So the evidence is
+  now 20 of 20 executed, not 18 of 18.** Neither crashes under `PYTHONIOENCODING=cp1252 --help`
+  patched or unpatched, so neither was among the 12 crash fixes.
+- **[2026-09-18] NEW GAP, opened by the upstream merge: the diff covers 20 of the tree's 27
+  `scripts/` entry points.** The seven it does not touch arrived with `ef4524e` or were written
+  after the diff was staged: `bench_cupy_seam.py`, `engine_eval.py`, `frnet_eval_by_range.py`,
+  `gpu_parity.py`, `plan_regret_frnet_delta.py`, `r9_stages.py`, `vram_contention.py`. Tested
+  under `PYTHONIOENCODING=cp1252 --help`: **`bench_cupy_seam.py` and `vram_contention.py` crash**
+  (`UnicodeEncodeError` on `'⚑'`, the ⚑ flag character), the other five are clean. Both
+  crashing scripts are GPU-lane files and belong to Shrestha's lane, so they are reported here
+  rather than patched. Whatever is decided for R-c should cover them.
 - **Code outside `scripts/` is not covered.** `python -m vrgrid.run` and the harnesses under
   `reports/harnesses/` do not get this. The only truly central fix is still
   `include/vrgrid/__init__.py`, which is frozen (D3).
@@ -75,7 +88,7 @@ prints the name into `usage:`), `PYTHONUTF8=0`:
 | sampling_table | full run | yes | exit 0 | exit 0 | yes |
 | data_status | full run | yes | exit 1 | exit 1 | yes |
 
-- **No change on a UTF-8 terminal:** 18 of 18 executed scripts are byte-identical.
+- **No change on a UTF-8 terminal:** **20 of 20** executed scripts are byte-identical (the last two closed 2026-09-18; see above).
 - **Fixes the crash:** all 12 that crashed now exit 0, and their cp1252 output equals the
   UTF-8 output, so the real ⚑ is emitted rather than `?`. That is the same 12 the earlier doc
   counted.
