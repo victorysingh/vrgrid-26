@@ -1,98 +1,64 @@
-# Runbook: the DL pipeline's real-time figure on AWS (g4dn.xlarge, NVIDIA T4)
+# Addendum: measuring the DL pipeline's real-time figure on the T4
 
-**Why this exists.** SIH26053 asks for "evidence of low latency (high FPS)" from a deep-learning
-pipeline. On the laptop, FRNet runs on CPU at 3–6 s per frame, so the DL mode (`--semantics frnet`)
-cannot be real time there. JP decided (2026-09-14) that the real-time figure comes from an AWS GPU
-run, and that **no CUDA build of PyTorch is installed on the laptop.**
+**[!] This is NOT a standalone runbook, and stopped being one on 2026-09-18.**
+**The runbook is `docs/gpu-lane/02-AWS-RUNBOOK.md`** (Shrestha's, upstream), together with
+`scripts/aws/t4.sh` and `scripts/aws/auto.sh`. It is more complete than this file was on every
+shared topic and it is the one that is maintained: region and cost guardrails, AMI, storage,
+security group, key pair, the launch checklist, first connect, S3 dataset staging, the environment,
+`tmux` working discipline, failure modes, and what "done" looks like. **Follow that file for
+everything up to and including a working instance with the repo and data on it.**
+
+What survives here is only the part upstream's runbook does not cover: **the DL-mode measurement
+protocol** — what to run, in what order, and what to report — because that answers a question
+(SIH26053's "evidence of low latency (high FPS)" for a *deep-learning* pipeline) that the GPU lane
+was not built to answer. Sections are numbered from 4 for that reason; 0–3 were launch and transfer
+instructions that duplicated upstream's, and they are gone.
+
+**Why the DL figure is needed at all.** On the laptop FRNet runs on CPU at 3–6 s per frame, so
+`--semantics frnet` cannot be real time there. JP decided (2026-09-14) that the real-time figure
+comes from an AWS GPU run, and that **no CUDA build of PyTorch is installed on the laptop.**
 
 **What the run produces, all from the same instance:**
 
-1. **GPU reproducibility:** do two CUDA runs of `--fast-scatter` agree point for point? This is its own
+1. **GPU reproducibility:** do two CUDA runs of `--fast-scatter` agree point for point? Its own
    question, separate from R-j's CPU answer.
 2. **The network alone:** FRNet inference latency per frame on the T4.
-3. **The whole DL pipeline end to end:** `timing_table.py --seq 08 --semantics frnet`, with FRNet inside
-   the `semantics` stage and the map back end on the instance's CPU. This is the number that answers
-   "real time". Quote it with the instance type, never next to the laptop's ground-truth-label figure
-   as if the two were one machine.
-
-**Revised 2026-09-16 after a pre-launch audit.** The first version could not have worked as written:
-it told you to clone a branch that has never been pushed, listed one frame too few, left PyTorch and
-Patchwork++ out of the install, used a Windows-only memory rule on Linux, and never said how to get
-results back or terminate the instance.
+3. **The whole DL pipeline end to end:** `timing_table.py --seq 08 --semantics frnet`, with FRNet
+   inside the `semantics` stage and the map back end on the instance's CPU. This is the number that
+   answers "real time". Quote it with the instance type, never next to the laptop's
+   ground-truth-label figure as if the two were one machine.
 
 ---
 
+## Four deltas from upstream's runbook — read these before following it
+
+1. **The dataset slice is ~494 MB, not 84.8 GB.** Upstream's §4 stages the full SemanticKITTI
+   through S3 because the GPU lane maps whole sequences. This measurement needs **seq 08 frames
+   0–200 only, plus `poses` and `calib`**. Note **201 frames, not 200**: `timing_table.py` reads
+   `--frames + 1`, the first frame being start-up. At that size S3 staging is optional.
+2. **The code may have to travel as a git bundle.** `jp/p99-alloc-fixes` has **never been pushed**,
+   so a `git clone` gets neither the DL mode nor these harnesses. A bundle keeps it local and needs
+   no authorisation; pushing the branch is outward-facing and needs JP's explicit go-ahead. Upstream
+   assumes the repo is already reachable.
+3. **On Windows, `tar` needs `--force-local`.** Without it GNU tar reads `C:/...` as a remote host
+   and fails with "Cannot connect to C: resolve failed". Round-trip verified on the laptop.
+4. **Upstream's "Bring nothing back" (their §4) is about the dataset, not the results.** Section 8
+   below copies back a few small JSON files, which is the point of the run. Do that before
+   terminating.
+
 ## [!] Read first
 
-- **No durations are documented for any step.** Nothing has been run on a T4 yet. Every command below
-  is prefixed with `time`, so this run produces the estimates for the next one. Keep the instance on
-  only while a step is running or results are being copied.
+- **No durations are documented for any step.** Nothing has been run on a T4 yet. Every command
+  below is prefixed with `time`, so this run produces the estimates for the next one. Keep the
+  instance on only while a step is running or results are being copied.
 - **Terminate, don't stop, when finished,** and only after the results are safely on the laptop
   (section 8). A stopped instance keeps billing for its disk.
-- **GPU reproducibility is not assumed.** R-j showed that on **CPU**, with one thread, `--fast-scatter`
-  matches the loop exactly and repeats exactly. On CUDA the mechanism differs (atomic-add ordering
-  inside kernels, cuDNN algorithm choice), so it is measured here, first (step e/f).
+- **GPU reproducibility is not assumed.** R-j showed that on **CPU**, with one thread,
+  `--fast-scatter` matches the loop exactly and repeats exactly. On CUDA the mechanism differs
+  (atomic-add ordering inside kernels, cuDNN algorithm choice), so it is measured here, first
+  (step e/f).
 - **Real data only.** If a file is missing on the instance, stop and copy it from the laptop. Never
   substitute or synthesise anything.
-
-## 0. Decide before launching: how the code gets there
-
-`jp/p99-alloc-fixes` has **never been pushed**, so `git clone` from GitHub will **not** have the DL mode,
-the harnesses or this runbook.
-
-- **Default: a git bundle** (keeps everything local; tested on the laptop, see section 9). No
-  authorisation needed.
-- **Alternative: push the branch first.** That is an outward-facing action and needs JP's explicit
-  go-ahead; it is not assumed here.
-
-## 1. Launch the instance (EC2 console)
-
-- **Instance type:** `g4dn.xlarge` (1× NVIDIA T4, 4 vCPU, 16 GB RAM).
-- **AMI:** an **Ubuntu x86_64 AMI with the NVIDIA driver preinstalled**, e.g. AWS's *Deep Learning Base
-  OSS Nvidia Driver GPU AMI (Ubuntu 22.04)*. Exact names change between releases; the requirement is
-  that `nvidia-smi` works and shows a `Tesla T4`. You install PyTorch yourself in a clean venv (step 4),
-  so a PyTorch-specific AMI is not required. The default SSH user on Ubuntu AMIs is `ubuntu`.
-- **Storage:** the default root volume is enough (the data is ~0.5 GB and PyTorch a few GB). On the
-  Storage step, confirm **Delete on termination = Yes** for the root volume, and **add no extra volumes**.
-- **Network:** a security group allowing SSH (port 22) **from your IP only**. **Do not** allocate an
-  Elastic IP; the auto-assigned public IP is enough.
-- **Key pair:** create or choose one and keep the `.pem` file. Below it is `<key.pem>`, and the instance's
-  public DNS or IP is `<host>`.
-
-## 2. Prepare on the laptop (Git Bash, from `vrgrid/`)
-
-These commands were **tested on the laptop** (section 9), apart from the final `scp`, which needs the
-instance.
-
-```sh
-# the code, as a bundle of the branch (about 1.9 MB)
-git bundle create ~/vrgrid.bundle jp/p99-alloc-fixes
-git rev-parse --short HEAD            # record it; the instance must show the same
-
-# the checkpoint, and its hash to compare on arrival
-sha256sum checkpoints/frnet-semantickitti_seg.pth
-#   must print 09adea9005215641aea915cc3aa2bebf74582ce240cca91dedd07940ad94285e
-
-# the data: frames 0-200 (201 frames), plus poses and calib, ~494 MB.
-# 201, not 200: timing_table.py reads --frames + 1 (the first frame is start-up).
-# --force-local is REQUIRED on Windows: without it GNU tar reads "C:/..." as a remote host.
-cd /c/KITTI/dataset
-tar --force-local -cf "$HOME/seq08_0-200.tar" poses/08.txt sequences/08/calib.txt \
-  $(for i in $(seq -f "%06g" 0 200); do echo sequences/08/velodyne/$i.bin sequences/08/labels/$i.label; done)
-cd -
-
-# copy all three to the instance (NOT tested -- needs the instance)
-scp -i <key.pem> "$HOME/vrgrid.bundle" "$HOME/seq08_0-200.tar" checkpoints/frnet-semantickitti_seg.pth ubuntu@<host>:~/
-```
-
-## 3. On the instance: record the session and check the GPU
-
-```sh
-ssh -i <key.pem> ubuntu@<host>
-exec > >(tee -a ~/aws-run.log) 2>&1     # everything below is logged
-nvidia-smi                               # must show Tesla T4; note the "CUDA Version" it reports
-python3 --version                        # must be >= 3.10
-```
 
 ## 4. On the instance: code, environment, data, checkpoint
 

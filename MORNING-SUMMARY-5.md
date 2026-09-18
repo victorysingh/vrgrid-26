@@ -11,7 +11,7 @@ PR.**
 
 1. **No real-time figure for the DL pipeline yet.** FRNet runs at 3–6 s per frame on the laptop CPU. JP
    decided the figure comes from an AWS g4dn.xlarge run, which **JP has to start**; the runbook and
-   harness are ready (`reports/aws-gpu-realtime-runbook.md`). Until then, the ~10 Hz figure is for the
+   harness are ready (`reports/aws-dl-realtime-addendum.md`). Until then, the ~10 Hz figure is for the
    ground-truth-label pipeline only.
 2. **Moving objects still come from ground-truth labels in the DL mode.** FRNet has no motion output.
    Decided as "keep and disclose"; it must be stated wherever the DL mode is reported.
@@ -32,7 +32,7 @@ PR.**
 | Variable-resolution grid, 5 cm → 50 cm up to 100 m | Already met: schedule `5/10/50` is exactly that |
 | Memory reduction vs uniform high-res 3D | Already met: 8.94 MB, 286× less than a dense 5 cm 3D voxel grid |
 | Real-time dashboard with colour coding | Already met; the dashboard now also accepts `--semantics frnet` |
-| Low latency / high FPS | Ground-truth-label pipeline ~10 Hz (pooled p99 89.58 ms, laptop); **DL pipeline pending the AWS run** |
+| Low latency / high FPS | Ground-truth-label pipeline ~10 Hz (pooled p99 89.58 ms, laptop) — **[restated 2026-09-18] on the pre-port CPU path and the pre-`df35fd5` grid; see the R-b row in `OPEN-ITEMS.md`. Upstream's GPU pipeline reports 22 ms/frame, which is a different execution model on different hardware, not a replacement figure.** **DL pipeline pending the AWS run** |
 | Accuracy in object classification across distances | **Now measured** to 50 m (below); beyond 50 m has no ground truth |
 
 ## What was done
@@ -56,7 +56,7 @@ PR.**
 - `reports/harnesses/frnet_gpu_latency.py`: FRNet per-frame latency on CUDA (p50/p99/FPS), checkpoint
   SHA-256 enforced, `torch.cuda.synchronize`, warm-up excluded, and it refuses to run without CUDA.
   Smoke-tested on CPU (not a result).
-- `reports/aws-gpu-realtime-runbook.md`: instance setup, the data the loader really needs (checked), a
+- `reports/aws-dl-realtime-addendum.md`: instance setup, the data the loader really needs (checked), a
   Linux replacement for the Windows-only `machine_state.py`, network-only and **end-to-end DL
   pipeline** runs on the same instance, and a pooled-p99 report. It says GPU results are not
   bit-identical.

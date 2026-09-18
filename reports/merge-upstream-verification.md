@@ -82,7 +82,10 @@ unknown      : semantics_source must be 'gt' or 'frnet', not 'pointnet'
 - **R-b restated, not retracted.** Pooled p99 89.58 ms describes the pre-port CPU path; and per
   §1 it describes a pre-`df35fd5` grid too. Upstream's 22 ms/frame is a different execution
   model on different hardware.
-- **`reports/aws-gpu-realtime-runbook.md` is superseded** by `docs/gpu-lane/02-AWS-RUNBOOK.md`
-  plus `scripts/aws/t4.sh`; it should be demoted to an addendum carrying only what it adds.
+- ~~Our AWS runbook is superseded.~~ **DONE 2026-09-18:** `reports/aws-gpu-realtime-runbook.md`
+  was demoted and renamed **`reports/aws-dl-realtime-addendum.md`**. Launch, connect and
+  transfer now defer to `docs/gpu-lane/02-AWS-RUNBOOK.md` + `scripts/aws/t4.sh`; what stays is
+  the DL-mode measurement protocol and four deltas (494 MB slice not 84.8 GB, 201 frames not
+  200, git bundle for an unpushed branch, `tar --force-local` on Windows).
 - `d540618` and `697a2bd` still awaiting Shrestha's review — now with the note that they are
   host-path functions since the port.

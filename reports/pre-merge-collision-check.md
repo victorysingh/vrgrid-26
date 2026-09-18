@@ -111,7 +111,7 @@ places. That is a genuine rewrite-versus-rewrite overlap and needs hand-merging 
 
 1. **Our AWS runbook is superseded.** Upstream has `docs/gpu-lane/02-AWS-RUNBOOK.md` plus a scripted
    `scripts/aws/t4.sh` and `auto.sh`, with the dataset staging already solved and credit guardrails
-   written. `reports/aws-gpu-realtime-runbook.md` should be withdrawn, keeping only the measurement
+   written. `reports/aws-dl-realtime-addendum.md` should be withdrawn, keeping only the measurement
    steps it adds (the DL real-time figure, GPU reproducibility steps e/f, the 0–200 frame slice) as an
    addendum to theirs.
 2. **R-b needs restating, not retracting.** "Gate met, pooled p99 89.58 ms" is true of the CPU path
