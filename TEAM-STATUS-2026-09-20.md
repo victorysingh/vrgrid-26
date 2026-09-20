@@ -105,7 +105,7 @@ provision or cancel anything.** JP's `reports/aws-dl-realtime-addendum.md` now s
 4. **R-b's closure needs its denominators.** Closing it at "p50 21.94 / p99 28.40, 3.5× headroom" is
    fair for `--device cuda --schedule 5/10/50`, but the row does not say so, and the item was
    originally about the CPU path on `5/10/20/40`. Either denominator in the row, or two rows.
-5. **Two GPU figures have no committed artifact — this is the one that matters most.** Traced with
+5. **Our two GPU frame-time numbers disagree, and we should always show them together.** Traced with
    escaped patterns across every `.md`, `.log` and `.json` in the tree:
    - **p50 21.94 / p99 28.40 ms** (the R-b closure) appears in `OPEN-ITEMS.md`,
      `13-PS-SCHEDULE.md` and `research-log.md` — and **in no log or JSON**.
@@ -114,11 +114,16 @@ provision or cancel anything.** JP's `reports/aws-dl-realtime-addendum.md` now s
    - Meanwhile **`docs/gpu-lane/t4/timing_cuda.log` records p50 67.42 / p99 100.18 ms, "MISSES
      10 Hz at p99"** on `5/10/20/40` — and **no document mentions that result.**
 
-   Both the favourable and unfavourable numbers can be true at once — different schedules, and
-   `5/10/50` drops a ring. The problem is that the repo shows one without its raw log and leaves the
-   other only in a log nothing cites. **"The DL pipeline meets 10 Hz" is currently our most quotable
-   sentence and our least reproducible one.** A re-run with `--frame-times` committed, plus the host
-   named the way `06`/`07`/`09`/`10` already name theirs, would close it.
+   **Both are true, and the honest version is both at once:** *on the schedule the project has
+   always published (`5/10/20/40`) the T4 misses 10 Hz at p99 by 0.18 ms, and on the problem
+   statement's own schedule (`5/10/50`, which drops a ring) it meets it with headroom — and only the
+   first of those has a committed log.* Quoting either one alone is misleading, in either direction:
+   the miss is real and reproducible, and the meet is real and currently unreproducible.
+
+   **"The DL pipeline meets 10 Hz" is our most quotable sentence and our least reproducible one.**
+   Before it reaches a slide it needs a re-run with `--frame-times` committed, and the host named
+   the way `06`/`07`/`09`/`10` already name theirs. Now tracked as the **GPU-LATENCY** row in
+   `OPEN-ITEMS.md`, which cites `t4/timing_cuda.log` directly so it stops being invisible.
 6. **The AWS docs need a superseded note from you.** `docs/gpu-lane/02-AWS-RUNBOOK.md`,
    `11-AWS-RESUME.md` and `scripts/aws/` still read as live plans. They are your files, so JP has
    not touched them; `research-log.md` already has the real story.
@@ -129,7 +134,15 @@ provision or cancel anything.** JP's `reports/aws-dl-realtime-addendum.md` now s
    those runs used the default — in which case it is the thread pool, not the model. Worth one
    re-run at 1 thread to settle.
 8. **N-3** — cause still open after your probe refuted the leading hypothesis (`8854b47`).
-9. **S-3 (residual channels into FRNet)** reads as yours and as the largest accuracy win left.
+9. **A patch is waiting for you, not applied.** `pending-review/frnet-threads-and-fast-scatter-on-upstream-base.diff`
+   puts JP's two reproducibility knobs onto **your** device-path implementation as the base, since
+   yours is the one that produced 10 Hz. It is pre-construction only — `perceive()`,
+   `launch(semantic_pred=)`, `semantics_from_prediction()`, `--semantics-every` and
+   `--semantics-precision` are all untouched. `--fast-scatter` is refused on the device, because the
+   shim is unverified there. **755 passed, 28 skipped** against `ae85979` with it applied (your 749
+   plus 6 new). Nothing merged, nothing pushed to `vrgrid26` — it is yours to accept, change or
+   reject.
+10. **S-3 (residual channels into FRNet)** reads as yours and as the largest accuracy win left.
 
 *Also: thank you for `df35fd5` and the `docs/handover-2026-09-17-aakash.md` write-up — closing
 someone else's lane item and documenting every change for their review is exactly right.*

@@ -1,0 +1,164 @@
+diff --git a/src/run/__main__.py b/src/run/__main__.py
+index 3a66367..5a3a718 100644
+--- a/src/run/__main__.py
++++ b/src/run/__main__.py
+@@ -61,7 +61,8 @@ class PerceptionFrame:
+ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True,
+                   timer=None, start_frame: int = 0, device: str = "cpu",
+                   semantic_source: str = "gt", semantic_every: int = 1,
+-                  semantic_precision: str = "fp32"):
++                  semantic_precision: str = "fp32", semantic_threads: int | None = None,
++                  semantic_fast_scatter: bool = False):
+     """Yield a PerceptionFrame per scan of `seq`.
+ 
+     `start_frame` skips ahead before the first yield (default 0, so existing
+@@ -86,6 +87,22 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
+     scan off it rather than the whole sequence -- which is the per-frame cost
+     the 10 Hz budget is about.
+     """
++    # Argument validation FIRST, before `loader.scans()` or the device is
++    # resolved. Two reasons: a rejected call should leave no half-built
++    # generator behind, and on a machine with no card `resolve_device()`
++    # would otherwise raise first and report 'no CUDA device' when the real
++    # answer is that this combination is refused outright.
++    if semantic_fast_scatter and device != "cpu":
++        # HOST ONLY, deliberately. The shim replaces the port's frustum scatter
++        # loops and was verified bit-identical to them on CPU at one thread. On
++        # the card it is UNVERIFIED -- R-j's open GPU half -- and the 10 Hz
++        # figure does not use it, so it is refused rather than silently applied
++        # to a configuration nobody has checked.
++        raise ValueError(
++            "--fast-scatter is host-only: the shim is verified against the "
++            "port's loops on CPU at one thread, not on the device "
++            f"(OPEN-ITEMS R-j). Got device={device!r}.")
++
+     from vrgrid.perception import ground, loader
+ 
+     scans = loader.scans(seq, max_frames=max_frames, start_frame=start_frame)
+@@ -101,6 +118,30 @@ def iter_pipeline(seq: str, max_frames: int | None, use_patchworkpp: bool = True
+     # not worth repeating.
+     frnet = None
+     if semantic_source == "frnet":
++        # BEFORE the model is built, both of these -- they change how it is
++        # CONSTRUCTED, not how it is used, so nothing below the construction
++        # (the device seam, `semantic_pred=`, `semantics_from_prediction`)
++        # sees a difference.
++        if semantic_threads is not None:
++            # OPEN-ITEMS R-j: at PyTorch's default intra-op thread count FRNet's
++            # labels do NOT reproduce run to run; at 1 thread they are exact.
++            # This is the knob that makes `--semantics frnet` reproducible, and
++            # it has to run before the model exists.
++            import torch
++
++            torch.set_num_threads(semantic_threads)
++        if semantic_fast_scatter:
++            import sys
++            from pathlib import Path
++
++            scripts = Path(__file__).resolve().parents[2] / "scripts"
++            if not (scripts / "frnet_fast_scatter.py").exists():
++                raise FileNotFoundError(
++                    f"--fast-scatter needs {scripts / 'frnet_fast_scatter.py'}")
++            sys.path.insert(0, str(scripts))
++            from frnet_fast_scatter import enable
++
++            enable(verify=True)
+         from vrgrid.perception import semantics as _sem
+         frnet = _sem.FRNetInference(amp=(semantic_precision == "fp16"))
+     # One entry, rebound on every inference frame: the last per-PIXEL label
+@@ -295,6 +336,15 @@ def build_parser() -> argparse.ArgumentParser:
+                         "between, gathered per image bin. 1 (default) infers "
+                         "every frame. Higher N trades class accuracy for "
+                         "latency -- scripts/semantics_rate.py measures both.")
++    p.add_argument("--threads", type=int, default=None, metavar="N",
++                   help="with --semantics frnet: torch.set_num_threads(N) before the "
++                        "model is built. N=1 is what makes FRNet's labels reproducible "
++                        "run to run (OPEN-ITEMS R-j); the default count does not.")
++    p.add_argument("--fast-scatter", action="store_true",
++                   help="with --semantics frnet on the HOST: apply "
++                        "scripts/frnet_fast_scatter.py, which verifies itself against "
++                        "the port's loops first. Refused with --device cuda: unverified "
++                        "there (R-j's open GPU half).")
+     p.add_argument("--viz", action="store_true", help="open the Rerun dashboard")
+     p.add_argument("--save", default=None, help="write a Rerun .rrd recording here")
+     p.add_argument(
+@@ -362,11 +412,16 @@ def main(argv=None) -> int:
+     truncated_frames, truncated_peak = 0, 0
+     ground_method = None
+     t_pull = time.perf_counter()
++    if args.semantics != "frnet" and (args.fast_scatter or args.threads is not None):
++        raise SystemExit("--fast-scatter and --threads only apply to --semantics frnet")
++
+     for frame in iter_pipeline(args.seq, args.frames, use_patchworkpp=not args.no_patchworkpp,
+                                start_frame=args.start_frame, device=args.device,
+                                semantic_source=args.semantics,
+                                semantic_every=args.semantics_every,
+-                               semantic_precision=args.semantics_precision):
++                               semantic_precision=args.semantics_precision,
++                               semantic_threads=args.threads,
++                               semantic_fast_scatter=args.fast_scatter):
+         t_frame = time.perf_counter()          # the pull above was perception
+         ground_method = frame.ground_method
+         counters = engine.step(frame) if engine is not None else None
+diff --git a/tests/test_frnet_reproducibility_knobs.py b/tests/test_frnet_reproducibility_knobs.py
+new file mode 100644
+index 0000000..0c94673
+--- /dev/null
++++ b/tests/test_frnet_reproducibility_knobs.py
+@@ -0,0 +1,56 @@
++"""`--threads` and `--fast-scatter` on the device-path FRNet implementation.
++
++These two knobs come from `jp/p99-alloc-fixes` and exist for OPEN-ITEMS R-j: at
++PyTorch's default intra-op thread count FRNet's labels do not reproduce run to
++run, and at `torch.set_num_threads(1)` they are exact. They change how the model
++is BUILT, not how it is used, so the device seam (`semantic_pred=`,
++`semantics_from_prediction`) is untouched by them.
++
++`--fast-scatter` is host-only on purpose: the shim was verified bit-identical to
++the port's frustum loops on CPU at one thread and is unverified on the card,
++which is R-j's open GPU half.
++"""
++import pytest
++
++from vrgrid.run.__main__ import build_parser, iter_pipeline
++
++
++def test_both_flags_exist_and_default_off():
++    args = build_parser().parse_args([])
++    assert args.threads is None
++    assert args.fast_scatter is False
++
++
++def test_threads_and_fast_scatter_parse():
++    args = build_parser().parse_args(["--semantics", "frnet", "--threads", "1", "--fast-scatter"])
++    assert args.threads == 1 and args.fast_scatter is True
++    assert args.semantics == "frnet"
++
++
++def test_fast_scatter_is_refused_on_the_device_and_says_why():
++    """The guard must fire BEFORE the device is resolved.
++
++    Otherwise a machine with no card answers "no CUDA device", which is true and
++    not the reason: the combination is refused outright.
++    """
++    with pytest.raises(ValueError, match="host-only"):
++        next(iter_pipeline("08", 1, semantic_source="frnet",
++                           semantic_fast_scatter=True, device="cuda"))
++
++
++def test_fast_scatter_error_names_r_j():
++    with pytest.raises(ValueError, match="R-j"):
++        next(iter_pipeline("08", 1, semantic_source="frnet",
++                           semantic_fast_scatter=True, device="cuda"))
++
++
++@pytest.mark.parametrize("flag", [["--fast-scatter"], ["--threads", "1"]])
++def test_the_knobs_are_inert_without_the_dl_mode(flag):
++    """Parsed, but `main()` refuses them without `--semantics frnet`.
++
++    Pinned because the failure mode this project has hit twice is a flag that is
++    silently ignored on the path it does not apply to.
++    """
++    args = build_parser().parse_args(flag)
++    assert args.semantics == "gt"
++    assert args.fast_scatter or args.threads is not None
