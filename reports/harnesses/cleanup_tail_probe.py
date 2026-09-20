@@ -1,3 +1,17 @@
+# PROVENANCE -- written 2026-09-14 for the cleanup tail (R-h / R-b), committed in 7e58ad7.
+#
+# Produced: the CORRECTED per-line attribution in reports/r-b-p99-tail-investigation.md
+#           -- visibility_cleanup 11.28 ms, _centres 10.78 ms / 7.09 MB, occupancy_state
+#           2.87 ms, flatnonzero 0.73 ms. That table overturned an earlier attribution
+#           that had measured only the three lines suspected rather than every line.
+# Run:      VRGRID_DATA_ROOT=C:/KITTI/dataset #             python reports/harnesses/cleanup_tail_probe.py
+#           Takes no arguments: seq 08, N = 200 frames are set at the top of the file.
+#
+# Measurement only. Replaces the method in-process; changes nothing in src/. The
+# transcription's map hash is checked against the shipped method on a separate run.
+#
+# [!] Added 2026-09-20. This file was the one harness of 39 with no provenance header,
+#     found by the roadmap audit -- which is the exact defect R-a exists to prevent.
 """Which line of MapEngine._cleanup makes its slow frames slow?
 
 Per-frame timing of every line, transcribed from the shipped _cleanup (after
