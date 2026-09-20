@@ -1,5 +1,18 @@
 # Addendum: measuring the DL pipeline's real-time figure on the T4
 
+> **[SUPERSEDED 2026-09-20 — AWS was never used. The GPU work happened on Kaggle.]**
+>
+> This protocol was written for an AWS `g4dn.xlarge` that **never ran**. `docs/research-log.md`
+> records that AWS was *abandoned, not deferred*: every GPU quota on the account read 0, the
+> increase request was refused because the free plan has no GPU tier, and **lifetime AWS spend was
+> $0.00**. The T4 pass ran instead on **Kaggle's free T4**, and `docs/gpu-lane/t4/host.log` records
+> the actual hardware — **2× Tesla T4, 15,360 MiB, driver 580.159.04, CUDA 13.0**.
+>
+> Kept, not deleted, because the measurement protocol below (what to run, in what order, what to
+> report) is independent of who provisions the card, and because deleting a plan hides that it was
+> made. **Nothing here describes a measurement that was taken.** For anything that actually ran, see
+> `docs/gpu-lane/` and `scripts/kaggle/`.
+
 **[!] This is NOT a standalone runbook, and stopped being one on 2026-09-18.**
 **The runbook is `docs/gpu-lane/02-AWS-RUNBOOK.md`** (Shrestha's, upstream), together with
 `scripts/aws/t4.sh` and `scripts/aws/auto.sh`. It is more complete than this file was on every
