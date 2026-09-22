@@ -40,7 +40,7 @@ python -m vrgrid.dash  # Rerun dashboard, separate process
 ## Layout and ownership
 ```
 include/vrgrid/     FROZEN interfaces — whole-team change only, never edit unilaterally
-src/grid/           lattice, rings, split/merge, fusion, refinement pool   [Aakash]
+src/grid/           lattice, rings, split/merge, fusion, refinement pool   [JP, from 2026-09-23; was Aakash]
 src/eval/           reference map, metrics, plan regret                    [Aakash]
 src/gpu/            kernels, allocators, timing                            [Shrestha]
 src/perception/     loader, transforms, range image, FRNet, ground         [JP]
