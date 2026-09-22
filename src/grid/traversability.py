@@ -106,6 +106,9 @@ def drivable_ids(thresholds=None) -> np.ndarray:
     return np.array(sorted(ids[n] for n in names), dtype=np.int32)
 
 
+DEPRESSION_MAX_RING = 1   # R10: rings 0-1 only -- see the range-limit note below
+
+
 def baseline_k(cell_m: float, baseline_m=None) -> int:
     """Half-width, in cells, of the §7.1 finite-difference stencil.
 
@@ -190,6 +193,98 @@ def max_step_cm(ground_cm, side: int, cell_m: float | None = None,
     diffs = [np.abs(z[:, ip] - z), np.abs(z[:, im] - z),
              np.abs(z[ip, :] - z), np.abs(z[im, :] - z)]
     return np.maximum.reduce(diffs).reshape(-1)
+
+
+# --- R10: the wide shallow depression -----------------------------------------
+#
+# ⚑ DESIGNED 2026-09-23. No prior specification existed for this -- the roadmap
+#   named "R10 wide-depression gradient" and nothing else: no commit, no file, no
+#   threshold, no predicate. Everything below is a fresh design decision, not a
+#   rediscovery, and the parameters are arguments rather than constants precisely
+#   so that the frozen ones can be chosen by the room instead of by this file.
+#
+# WHAT THE EXISTING BITS MISS. Bits 1 and 2 are differenced over
+# `baseline_m = 0.50`, chosen so a 12 cm kerb reads passable at every cell size
+# and a 40 cm pothole rim still fails. That baseline is the reason a 2 m wide,
+# 15 cm deep depression is invisible: its walls fall ~7.5 cm over the 0.5 m
+# stencil, a gradient of 0.15 against `tan(20 deg) = 0.364`, and no single
+# 4-neighbour step reaches `s_max = 15 cm` either. The feature is too WIDE for a
+# kerb-tuned stencil to see, not too shallow.
+#
+# WHY A SECOND DIFFERENCE AND NOT A LONGER SLOPE TEST. Lengthening the slope
+# baseline does not help: a bowl is symmetric, so its centre has near-zero first
+# derivative however far you reach. What distinguishes it is CURVATURE -- the
+# cell sits below the chord joining its neighbours. That is the quantity below.
+#
+# ⚑ RANGE LIMIT: RINGS 0-1 ONLY, AND THIS IS PHYSICS, NOT A TUNING CHOICE.
+#   Radial ground spacing between consecutive beams grows as the square of range
+#   (math §1.2, eq. 2-3): dr ~ r^2 * dphi / h_s. With h_s = 1.73 m and
+#   dphi ~ 0.4 deg, consecutive rings land 1 m apart at r ~ 15.7 m and 30 cm
+#   apart at r ~ 8.6 m. A depression cannot be seen at all unless at least two
+#   beams fall inside it, so beyond ~15 m a 1 m feature and beyond ~8 m a 30 cm
+#   feature are unresolvable REGARDLESS of stencil design -- no baseline, bit or
+#   threshold recovers information the sensor never sampled. Extending this to
+#   rings 2-3 would therefore manufacture confident-looking output from
+#   interpolation, which is the failure §7.1's own note refuses. Rings 0-1 it is.
+#   Honest caveat: ring 1 of 5/10/20/40 runs to 25 m, past the ~15.7 m limit, so
+#   this degrades across ring 1 rather than stopping cleanly at its edge.
+
+
+def depression_dip_cm(ground_cm, side: int, cell_m: float, baseline_m: float):
+    """How far each cell sits BELOW the chord joining its +/-baseline neighbours.
+
+        dip = (z[i+k] + z[i-k]) / 2 - z[i],    k = baseline_m / (2 c_L)
+
+    Positive means concave down into the ground -- a bowl. Returned per axis and
+    reduced with `maximum`, so a trench that runs north-south is caught by the
+    east-west pair even though the along-trench pair is flat. In centimetres,
+    like `max_step_cm`, because the thing it is compared against is a depth.
+
+    Border cells use the same clipped stencil as `gradient()`; where the stencil
+    is one-sided the chord is meaningless, and `depression_mask` masks them out
+    exactly as `bitfield` does for bits 1 and 2.
+    """
+    z = np.asarray(ground_cm, dtype=np.float64).reshape(side, side)
+    ip, im, _ = _stencil(side, baseline_k(cell_m, baseline_m))
+    dip_x = (z[:, ip] + z[:, im]) / 2.0 - z
+    dip_y = (z[ip, :] + z[im, :]) / 2.0 - z
+    return np.maximum(dip_x, dip_y).reshape(-1)
+
+
+def depression_mask(ground_cm, obs_count, side: int, cell_m: float,
+                    ring_index: int, baseline_m: float, dip_min_cm: float):
+    """R10: wide shallow depressions, rings 0-1 only. Returns a bool array.
+
+    NOT wired into `bitfield()` yet, deliberately. The bit it would set,
+    `TRAV_DEPRESSION = 1 << 6`, has to be declared in `include/vrgrid/cell.py`,
+    which `CLAUDE.md` makes a whole-team change regardless of who owns
+    `src/grid/`. Bits 6 and 7 of the existing `traversability` uint8 are free, so
+    this costs no memory and the 12-byte cell is untouched -- but the constant is
+    staged in `pending-review/r10-trav-depression-bit.md` for three-way sign-off,
+    and this function stays callable-but-unused until that lands.
+
+    `baseline_m` and `dip_min_cm` are ARGUMENTS, not module constants: §7.1's
+    thresholds are frozen in `configs/thresholds.yaml` before schedules are
+    compared, and a constant living in source cannot be frozen (flaw E6).
+    `configs/` is also still a three-way directory, so the proposed keys ship in
+    the same staged note rather than being added here.
+
+    Comparison is `>=`, unlike bit 2's `>`. A dip equal to the limit is as
+    untraversable as a step of the same size, and the boundary case fails safe --
+    which is the convention bit 5 already sets for anything uncertain.
+    """
+    if ring_index > DEPRESSION_MAX_RING:
+        # See the range-limit note above: beyond ring 1 the beams are too far
+        # apart for the feature to exist in the data at all.
+        return np.zeros(np.asarray(ground_cm).size, dtype=bool)
+
+    ip, im, _ = _stencil(side, baseline_k(cell_m, baseline_m))
+    seen = (np.asarray(obs_count).reshape(side, side) >= 1)
+    # Same observed-neighbour rule as bits 1 and 2: an unobserved neighbour holds
+    # ground_height 0, and differencing against a default fabricates a bowl.
+    geometric = (seen & seen[:, ip] & seen[:, im] & seen[ip, :] & seen[im, :]).reshape(-1)
+    dip = depression_dip_cm(ground_cm, side, cell_m, baseline_m)
+    return geometric & ~border_mask(side) & (dip >= float(dip_min_cm))
 
 
 def border_mask(side: int) -> np.ndarray:
