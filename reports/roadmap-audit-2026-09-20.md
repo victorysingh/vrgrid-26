@@ -37,6 +37,9 @@ reporting. Reading `R-b` as "roadmap item 2" is the mistake this table exists to
 ### Item by item
 
 **R1 — per-class / per-range accuracy. DONE. Assigned JP+Hriday; done by JP alone.**
+
+> **[CORRECTION 2026-09-23, from the Phase-3 sweep.] This entry conflated two different measurements, and the duplicate-work claim below is attached to the wrong one.** `reports/r1-accuracy-by-class-and-range-band.md` is **HEIGHT** accuracy — RMSE in cm per range band and class (0.95 cm, 1.14 cm, 3.60 cm). Shrestha's `26fe207` is **CLASSIFICATION** accuracy — whether FRNet predicts the right class at range. **They measure different things and are not duplicates.** The genuine duplicate pair is JP's later extension `a86b491` / `scripts/frnet_eval_by_range.py` against `26fe207` / `scripts/accuracy_by_range.py`, both of which are classification accuracy vs distance. The incident count of four in §5 is unchanged; only which artifact carries it moves. **Further:** because R1 is a height metric it is **band-dependent**, so its figures are provisionally invalidated by `843ad54` — see `reports/full-project-audit-2026-09-23.md`.
+
 `7eb0d2d` (11 Sep, victorysingh) created the report. Later extended by JP as
 `scripts/frnet_eval_by_range.py` + `a86b491`. ⚑ **Duplicated upstream:** Shrestha independently
 shipped `26fe207` *"eval: classification accuracy against DISTANCE, which the statement asks for"*
