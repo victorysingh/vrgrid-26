@@ -1,6 +1,19 @@
 # R7 — hazard miss rate, with the correct denominator
 
-> **⚠ [PROVISIONALLY INVALIDATED 2026-09-23 — figures predate the band change.]**
+> **⚠ [STALE 2026-09-23 — CAUSE ISOLATED, and it is NOT the band.]**
+> **Correction to this banner's own first version, same day:** it blamed `843ad54`'s
+> height-band change. **Measured, and that is wrong.** Restoring the old band
+> `[-2.0, 6.0]` leaves ring-0 RMSE **identical at 1.8660 cm**, so the band moves
+> nothing here. The cause is **`df35fd5`** (17 Sep, the D2/R3 ring-boundary rework):
+> measured at `df35fd5~1` ring-0 RMSE is **1.7747 cm** (gate OK, 0.8% from the
+> documented 1.76), and on the current tree it is **1.8660 cm** (gate FAILS, 6.0%
+> apart). That commit deliberately changed which returns land in which ring — it fixed
+> 0.108% nested footprints and 0.224% of returns being dropped — so the shift is most
+> likely an intended consequence that was never restated here. **This report's numbers
+> have therefore been stale since 17 Sep, and the harness gate has been failing that
+> whole time because nobody re-ran it.** Re-measuring is blocked until someone decides
+> whether 1.8660 is the correct new baseline; that is a judgement about the reference
+> map, tracked as the **RMSE-BASELINE** row in `OPEN-ITEMS.md`.
 > `843ad54` (17 Sep) moved `vertical_extent_m` from `[-2.0, 6.0]` to `[-3.5, 4.5]` in
 > both schedule configs — same 8 m span, shifted down 1.5 m — and wired it through
 > `quantise.py`, `metrics.py`, `harness.py` and both kernel files. **Every figure in
