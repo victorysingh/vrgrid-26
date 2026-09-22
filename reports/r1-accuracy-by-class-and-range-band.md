@@ -1,5 +1,15 @@
 # R1 — height accuracy by range band × class, with n
 
+> **⚠ [PROVISIONALLY INVALIDATED 2026-09-23 — figures predate the band change.]**
+> `843ad54` (17 Sep) moved `vertical_extent_m` from `[-2.0, 6.0]` to `[-3.5, 4.5]` in
+> both schedule configs — same 8 m span, shifted down 1.5 m — and wired it through
+> `quantise.py`, `metrics.py`, `harness.py` and both kernel files. **Every figure in
+> this report is height-derived and was measured on the OLD band.** They have **not**
+> been re-measured, so this is "do not quote until re-run", not "wrong". Re-running
+> this report against the current band is tracked as the **BAND** row in
+> `OPEN-ITEMS.md`.
+
+
 *Measured 2026-09-11 overnight on `main` at `9b40ff2`. New computation from the
 existing eval harness; no tracked file was modified.*
 

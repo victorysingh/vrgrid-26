@@ -85,17 +85,39 @@ All rings remain part of one global **5 cm lattice**, allowing the representatio
 > ‡ **Determinism is currently qualified, and the qualification is open item D1.**
 > The kernel path — scatter, fuse and the map hash — is bit-identical and
 > CI-gated. **End-to-end replay is not.** `src/perception/ground.py` holds a
-> stateful Patchwork++ singleton, so `test_real_sequence_replay_is_identical`
-> fails: two replays of the same sequence in one process differ by **1,245 of
-> 1,479,013 points**. Until D1 is closed, "bit-identical map hash" is true of the
-> kernel path and false of a full replay. See `OPEN-ITEMS.md` §2.
+> stateful Patchwork++ singleton. **[Corrected 2026-09-23: this footnote was stale.]**
+> It said `test_real_sequence_replay_is_identical` *fails*, with two replays in one
+> process differing by **1,245 of 1,479,013 points**. **That symptom is gone** —
+> `3c26d47` added a per-run `ground.reset_estimator()`, and the test now passes
+> (`tests/test_determinism.py` 13/13, re-run 2026-09-23). The historical figure is
+> kept above because it is what the defect looked like. **What remains open is the
+> design, not the gate:** D1 was decided as option A (keep the module-level estimator,
+> reset per run) and the convention is now enforced by
+> `tests/test_ground_reset_convention.py`, but any new entry point that forgets the
+> reset re-creates the trap. See `OPEN-ITEMS.md` D1.
 
-> † **Quote this with its host attached** — open item D8. The tree currently
-> holds two honest end-to-end figures for the same quantity on different
-> machines: 89.18 / 100.43 ms here, and 108.65 / 127.23 ms in
-> `docs/handover-2026-09-02.md`. One is 0.43 ms over the 100 ms budget and the
-> other 27 ms over. Neither is "the" frame latency until D8 picks one reference
-> host and one command.
+> † **[Rewritten 2026-09-23.] SIX candidate end-to-end figures currently exist for
+> this one quantity, not two.** The earlier version of this footnote named two and
+> read as though that were the whole picture; four more have been measured since it
+> was written. None of them is wrong — they differ by host, device and schedule —
+> and **none of them is "the" frame latency until D8 picks one reference host and
+> one command.** D8 is still open and is a joint call, so this footnote deliberately
+> does **not** nominate a winner. Every figure is listed with the recipe needed to
+> reproduce it:
+>
+> | p50 / p99 (ms) | host | device | schedule | frames | source |
+> |---|---|---|---|---|---|
+> | **89.18 / 100.43** | i7-14650HX | CPU | 5/10/20/40 | — | the table above |
+> | 108.65 / 127.23 | different machine | CPU | 5/10/20/40 | — | `docs/handover-2026-09-02.md` |
+> | 79.74 / **89.58** pooled | i7-13620H | CPU | 5/10/20/40 | 5 × 200, state-gated | `36a4dbe` |
+> | 81.19 / **87.69** pooled (warm)<br>82.10 / **101.70** (cold start) | i7-13620H | CPU | 5/10/20/40 | 2 × (5 × 200), state-gated | `6d16bb4`, `reports/r-b-post-merge-p99.md` |
+> | 21.94 / **28.40** | Kaggle 2× Tesla T4 | CUDA | **5/10/50** | 200 | ⚠ **no committed artifact** — prose only |
+> | 67.42 / **100.18** — *"MISSES 10 Hz at p99"* | Kaggle 2× Tesla T4 | CUDA | 5/10/20/40 | 200 | `docs/gpu-lane/t4/timing_cuda.log` |
+>
+> Two things to carry with any of them. The `5/10/50` schedule drops a ring, so it
+> is not comparable to `5/10/20/40` without saying so. And the only committed CUDA
+> timing artifact is the last row, which **misses** the budget — while the row above
+> it, which meets it, has no artifact at all. Quote them together or not at all.
 
 The fixed footprint is allocated at startup:
 
