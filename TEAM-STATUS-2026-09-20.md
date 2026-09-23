@@ -100,6 +100,27 @@ provision or cancel anything.** JP's `reports/aws-dl-realtime-addendum.md` now s
    `tests/test_metrics.py:472` is unchanged (`(p, l, T) for p, l, _, T in ...`) and ruff **0.12.0**
    reports **10 errors** on `ae85979` — that E741 plus `scripts/kaggle/elprobe.py` (E402, E741), two
    notebook E702/E701, and `scripts/mos_learned.py:233` (E702). **CI runs bare `ruff check .` with no
+
+> **[CORRECTION 2026-09-24 — the R-d finding above is WRONG and is retracted.]**
+> The claim that R-d was a false closure came from running **ruff 0.12.0**, an older
+> version than CI installs. Re-tested with **ruff 0.16.8** — the exact version CI
+> installs — in a clean venv, `--no-cache`, against `Stxtics03/vrgrid-26@8acbfe9`:
+> **`All checks passed`**. Shrestha's closure (*"`ruff check .` passes clean on `main`;
+> it is a CI gate and it is green"*) is **true and verified**.
+>
+> `pyproject.toml` sets no `[tool.ruff.lint] select`, so ruff uses its **default rule
+> set**, and that set changed **in both directions** between versions: 0.16.8 drops the
+> `E7xx` family from defaults (which is why `main`'s `E731`/`E741`/`E702` vanish) while
+> enforcing `I001`, `RUF100`, `PLW1510` and `RUF059`. "Newer is stricter" was the wrong
+> model.
+>
+> **What is true instead:** `jp/p99-alloc-fixes` carries **69 errors under CI's own
+> ruff** — real lint debt in JP's own files (`plan_regret_frnet_delta.py` 10,
+> `whole_frame_bench.py` 6, `test_plan_regret_frnet_delta.py` 5, `rmse_baseline_probe.py`
+> 4, …), not inherited from `main` and not version drift. That is JP's to clean up.
+> Pinning ruff in `ci.yml` remains worth doing so it cannot drift, but it explains
+> nothing here.
+
    version pinned anywhere**, so whether CI is green depends on which ruff GitHub installs that
    morning. Suggest pinning ruff in CI and reopening R-d.
 4. **R-b's closure needs its denominators.** Closing it at "p50 21.94 / p99 28.40, 3.5× headroom" is

@@ -41,13 +41,21 @@ non-determinism as a property of the mode when you showed it vanishes at one thr
 three frames). The new row landed but S-6 wasn't updated. Same in-place-correction convention you
 used for the 19 Sep entry.
 
-**4. R-d is marked closed and isn't.** `tests/test_metrics.py:472` still reads
-`(p, l, T) for p, l, _, T in ...`, the ruff config is unchanged with no E741 exemption, and ruff
-0.12.0 reports **10 errors** on `ae85979` — that E741 plus `scripts/kaggle/elprobe.py` (E402, E741),
-two notebook E702/E701, and `scripts/mos_learned.py:233`. The root cause is that CI runs bare
-`ruff check .` with **no version pinned anywhere**, so "it is green" is a statement about whichever
-ruff GitHub installed that morning. You hit this from the other side in `b977260`. Suggest pinning
-ruff and reopening the row.
+**4. ~~R-d is marked closed and isn't.~~ RETRACTED — your closure was right, my check was wrong.**
+I originally wrote that R-d was a false closure, on the basis that `ruff check .` gave 10 errors
+on `ae85979`. **That was measured with ruff 0.12.0, an older version than CI installs.** Re-run
+with **ruff 0.16.8** — exactly what the workflow pip-installs — in a clean venv with
+`--no-cache`: **`All checks passed`** on `main`. Your row is correct and I withdraw the flag.
+
+The reason the two disagree is worth knowing anyway: `pyproject.toml` sets no
+`[tool.ruff.lint] select`, so ruff uses its **default rule set**, and that set changed **in both
+directions** — 0.16.8 drops the `E7xx` family from defaults (which is why the `E731`/`E741`/`E702`
+hits vanish) while adding `I001`, `RUF100`, `PLW1510`, `RUF059`. So "newer is stricter" is the
+wrong model, and an unpinned ruff can go green *or* red on a version bump. Pinning it in
+`ci.yml` is still worth doing for that reason, but nothing is broken today.
+
+For completeness: **my own branch has 69 errors under that same 0.16.8** — my lint debt, in my
+files, not inherited from `main`. Mine to clean up.
 
 **5. R-b's row and your research log disagree about the machine.** The row says *"**The laptop** meets
 10 Hz at p99: frame p50 21.94 / p99 28.40 ms on `5/10/50`"*. `docs/research-log.md:561` gives the

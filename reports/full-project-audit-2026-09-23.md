@@ -216,6 +216,27 @@ properly.
   `pending-review/playbook-band-invalidated.md` because of the stakes.
 - **S-6** contradicts his own D12 (§2.4).
 - **R-d**: pin ruff in CI, reopen the row — 10 errors under 0.12.0, CI version unpinned.
+
+> **[CORRECTION 2026-09-24 — the R-d finding above is WRONG and is retracted.]**
+> The claim that R-d was a false closure came from running **ruff 0.12.0**, an older
+> version than CI installs. Re-tested with **ruff 0.16.8** — the exact version CI
+> installs — in a clean venv, `--no-cache`, against `Stxtics03/vrgrid-26@8acbfe9`:
+> **`All checks passed`**. Shrestha's closure (*"`ruff check .` passes clean on `main`;
+> it is a CI gate and it is green"*) is **true and verified**.
+>
+> `pyproject.toml` sets no `[tool.ruff.lint] select`, so ruff uses its **default rule
+> set**, and that set changed **in both directions** between versions: 0.16.8 drops the
+> `E7xx` family from defaults (which is why `main`'s `E731`/`E741`/`E702` vanish) while
+> enforcing `I001`, `RUF100`, `PLW1510` and `RUF059`. "Newer is stricter" was the wrong
+> model.
+>
+> **What is true instead:** `jp/p99-alloc-fixes` carries **69 errors under CI's own
+> ruff** — real lint debt in JP's own files (`plan_regret_frnet_delta.py` 10,
+> `whole_frame_bench.py` 6, `test_plan_regret_frnet_delta.py` 5, `rmse_baseline_probe.py`
+> 4, …), not inherited from `main` and not version drift. That is JP's to clean up.
+> Pinning ruff in `ci.yml` remains worth doing so it cannot drift, but it explains
+> nothing here.
+
 - **R-b**: the 21.94/28.40 row says *"the laptop"*; `research-log.md:561` calls the same numbers *"the
   T4 column"*. One of the two is wrong.
 - **`configs/` review** (§3.1) — the change is sound; the missing three-way review is the issue.

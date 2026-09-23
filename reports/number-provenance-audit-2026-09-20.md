@@ -35,8 +35,9 @@ that as wrong and this table as the correction.
 | 8 | **Pooled p99 87.69 ms** warm / **101.70 ms** cold-start | my `OPEN-ITEMS.md`, `reports/r-b-post-merge-p99.md` | `6d16bb4` | ✅ 10 runs as 2×1,000 frames, CPU, `5/10/20/40`, state OK before *and* after each, both percentile methods shown | ✅ verified |
 | 9 | **R-k**: agreement 96.5% vs 96.5%; masks differ 5,878/2,471,164 (0.2379%); timing 19.26 vs 19.40 ms | my `OPEN-ITEMS.md` | `1884358`, `10ba897`; `ground_estimator_carryover.py`, `ground_cost_reset.py` | ✅ seq 08, 60 scans, 20-frame window; 3 processes/config; state gated | ✅ verified |
 | 10 | **R-a "Done, each with a PROVENANCE header"** | my `OPEN-ITEMS.md` | 39 harnesses | — | ✅ **now** accurate — was 38/39 until `1d24593` |
-| 11 | **R-d "`ruff check .` passes clean"** | upstream `OPEN-ITEMS.md` | `tests/test_metrics.py:472` unchanged; ruff 0.12.0 on `ae85979` → **10 errors** | CI runs bare `ruff check .`, **no version pinned** | ⚠️ **still a false closure** — re-confirmed today, not merely "previously caught" |
+| 11 | ~~**R-d "`ruff check .` passes clean"**~~ **RETRACTED, see below** | upstream `OPEN-ITEMS.md` | `tests/test_metrics.py:472` unchanged; ruff 0.12.0 on `ae85979` → **10 errors** | CI runs bare `ruff check .`, **no version pinned** | ⚠️ **still a false closure** — re-confirmed today, not merely "previously caught" |
 | 12 | **D2 / R3+R4 closed** | both copies | `df35fd5` diff read: lattice change + `test_no_cell_footprint_contains_another_under_foveation` + `test_every_return_inside_the_map_is_binned` | ✅ seq 08, 30 frames: 0.108% nested footprints, 0.224% returns dropped, both now 0 | ✅ verified |
+
 | 13 | **D9** transform p99 22.07 → 1.45 ms | my `OPEN-ITEMS.md`, `pending-review/transform-points-allocation.md` | `12613df` | ✅ stated in the pending-review doc | ✅ verified |
 | 14 | **D11/R2** plan regret +1.069 (CI [+0.730, +1.436]) and +0.567 (CI [+0.301, +0.846]) | my `OPEN-ITEMS.md` | `4e81220`, `scripts/plan_regret_frnet_delta.py` | ✅ real seq 08, paired per-query, seeded bootstrap | ✅ verified |
 | 15 | **FRNet 90.3% point accuracy / 65.2% mIoU**, 200 frames seq 08 | `CLAUDE.md`, `checkpoints/…PROVENANCE.md`, gpu-lane docs | checkpoint provenance file + `scripts/frnet_eval.py` | ✅ frames and sequence stated; **CLAUDE.md explicitly warns 51.5% and 69.8% are arithmetic errors still in circulation, and 98.3% is a single-frame check** | ✅ verified, with a live ambiguity the doc itself manages |
@@ -45,6 +46,27 @@ that as wrong and this table as the correction.
 | 18 | Memory **8.94 MB (5/10/20/40)** / **6.24 MB (5/10/50)**, 286× vs dense 3D | `README`, `MORNING-SUMMARY-5`, `13-PS-SCHEDULE` | `scripts/memory_table.py` | ✅ cell counts and 12 B/cell shown | ✅ verified |
 | 19 | Test counts **821 passed** (mine) / **749 passed** (upstream) | this session's reports | both suites run; upstream run under an isolated import root | ✅ | ✅ verified |
 | 20 | **N-3** seq 00 ring 2 ρ 2.20 → 1.02 | both copies | `scripts/crosslook_probe.py`; hypothesis **refuted** `8854b47` | ✅ | ✅ verified as *open with a refuted hypothesis* |
+
+
+> **[CORRECTION 2026-09-24 — the R-d finding above is WRONG and is retracted.]**
+> The claim that R-d was a false closure came from running **ruff 0.12.0**, an older
+> version than CI installs. Re-tested with **ruff 0.16.8** — the exact version CI
+> installs — in a clean venv, `--no-cache`, against `Stxtics03/vrgrid-26@8acbfe9`:
+> **`All checks passed`**. Shrestha's closure (*"`ruff check .` passes clean on `main`;
+> it is a CI gate and it is green"*) is **true and verified**.
+>
+> `pyproject.toml` sets no `[tool.ruff.lint] select`, so ruff uses its **default rule
+> set**, and that set changed **in both directions** between versions: 0.16.8 drops the
+> `E7xx` family from defaults (which is why `main`'s `E731`/`E741`/`E702` vanish) while
+> enforcing `I001`, `RUF100`, `PLW1510` and `RUF059`. "Newer is stricter" was the wrong
+> model.
+>
+> **What is true instead:** `jp/p99-alloc-fixes` carries **69 errors under CI's own
+> ruff** — real lint debt in JP's own files (`plan_regret_frnet_delta.py` 10,
+> `whole_frame_bench.py` 6, `test_plan_regret_frnet_delta.py` 5, `rmse_baseline_probe.py`
+> 4, …), not inherited from `main` and not version drift. That is JP's to clean up.
+> Pinning ruff in `ci.yml` remains worth doing so it cannot drift, but it explains
+> nothing here.
 
 ### Items that cannot be verified
 
