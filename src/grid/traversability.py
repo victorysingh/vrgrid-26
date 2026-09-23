@@ -78,6 +78,7 @@ from vrgrid.cell import (
     TRAV_ROUGHNESS,
     TRAV_SLOPE,
     TRAV_STEP,
+    TRAV_DEPRESSION,
 )
 from vrgrid.grid.fusion import unpack_class
 from vrgrid.grid.quantise import dequantise_variance_cm2
@@ -310,6 +311,7 @@ def _plan(side: int, cell_m: float, th) -> dict:
     """
     t = th["traversability"]
     key = (side, float(cell_m), t.get("baseline_m"), t["theta_max_deg"], t["s_max_m"],
+           t.get("depression_baseline_m"), t.get("depression_dip_min_m"),
            t["sigma2_max_m2"], t["n_min"], t["h_vehicle_m"], tuple(t["drivable_classes"]))
     plan = _PLANS.get(key)
     if plan is None:
@@ -325,6 +327,9 @@ def _plan(side: int, cell_m: float, th) -> dict:
             "border": border_mask(side),
             "tan": np.tan(np.radians(t["theta_max_deg"])),
             "step_cm": t["s_max_m"] * 100.0,
+            # R10: a second baseline, alongside the kerb-tuned one above.
+            "dep_baseline_m": t["depression_baseline_m"],
+            "dep_dip_cm": t["depression_dip_min_m"] * 100.0,
             "h_cm": t["h_vehicle_m"] * 100.0,
             "n_min": t["n_min"],
             "rough": dequantise_variance_cm2(byte.astype(np.uint8)) * 1e-4 > t["sigma2_max_m2"],
@@ -335,7 +340,8 @@ def _plan(side: int, cell_m: float, th) -> dict:
     return plan
 
 
-def bitfield(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
+def bitfield(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None,
+             ring_index: int = 0):
     """The six bits, for one ring. Math §7.1. Returns uint8, 0 = traversable.
 
     `ring_slice` is the ring's span in the flat arrays and `side` its window
@@ -383,10 +389,19 @@ def bitfield(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
     np.bitwise_or(out, TRAV_ROUGHNESS, out=out, where=P["rough"][soa["height_variance"][ring_slice]])
     np.bitwise_or(out, TRAV_CLASS, out=out, where=P["nondrivable"][soa["semantic_class"][ring_slice]])
     np.bitwise_or(out, TRAV_CONFIDENCE, out=out, where=(n < P["n_min"]) | P["border"])
+
+    # R10, bit 6. Rings 0-1 only -- see the range-limit note above.
+    # `ring_index` defaults to 0 so a caller timing a single ring keeps
+    # working; `update()` passes the real index.
+    if ring_index <= DEPRESSION_MAX_RING:
+        np.bitwise_or(out, TRAV_DEPRESSION, out=out,
+                      where=depression_mask(ground, n, side, cell_m, ring_index,
+                                            P["dep_baseline_m"], P["dep_dip_cm"]))
     return out
 
 
-def bitfield_reference(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None):
+def bitfield_reference(soa, ring_slice: slice, side: int, cell_m: float, thresholds=None,
+                       ring_index: int = 0):
     """The six bits, for one ring, written the direct way. Math §7.1.
 
     The reference `bitfield` is pinned against
@@ -468,6 +483,18 @@ def bitfield_reference(soa, ring_slice: slice, side: int, cell_m: float, thresho
     thin = (n < t["n_min"]) | border_mask(side)
     out |= np.where(thin, TRAV_CONFIDENCE, 0).astype(np.uint8)
 
+    # R10, bit 6 -- written the direct way, same predicate as `bitfield`.
+    # Kept in step deliberately: `test_bitfield_matches_the_reference` is
+    # what makes the fast path trustworthy, and it caught this omission the
+    # first time bit 6 was wired into only one of the two.
+    t = (thresholds if thresholds is not None else load_thresholds())["traversability"]
+    if ring_index <= DEPRESSION_MAX_RING:
+        dep = depression_mask(soa["ground_height"][ring_slice].astype(np.int32),
+                              soa["obs_count"][ring_slice], side, cell_m, ring_index,
+                              t["depression_baseline_m"],
+                              t["depression_dip_min_m"] * 100.0)
+        out |= np.where(dep, TRAV_DEPRESSION, 0).astype(np.uint8)
+
     return out
 
 
@@ -487,7 +514,7 @@ def update(soa, schedule, rings, thresholds=None, device: str = "cpu") -> None:
         return
     for level, (sl, side) in enumerate(rings):
         soa["traversability"][sl] = bitfield(
-            soa, sl, side, schedule.rings[level].cell_m, th)
+            soa, sl, side, schedule.rings[level].cell_m, th, ring_index=level)
 
 
 def is_traversable_bits(bits) -> np.ndarray:
