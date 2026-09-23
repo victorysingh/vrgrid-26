@@ -65,10 +65,10 @@ from vrgrid.gpu.visibility import Sensor, apply_miss, visibility_cleanup
 # gone on clipping perfectly storable ids after the split landed.
 from vrgrid.grid.fusion import (
     CLASS_MAX,
+    age_vru_latch,
     fuse,
     new_occupancy_scratch,
     occupancy_state,
-    age_vru_latch,
 )
 from vrgrid.grid.lattice import bin_points, new_bin_scratch
 from vrgrid.grid.schedule import load_thresholds

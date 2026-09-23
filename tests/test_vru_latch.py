@@ -9,7 +9,6 @@ seen here recently?" — as a latch, not a vote.
 """
 import numpy as np
 import pytest
-
 from vrgrid.cell import (
     CELL_BYTES,
     CELL_DTYPE,

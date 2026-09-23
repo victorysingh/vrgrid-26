@@ -75,10 +75,10 @@ from vrgrid.cell import (
     TRAV_CLASS,
     TRAV_CLEARANCE,
     TRAV_CONFIDENCE,
+    TRAV_DEPRESSION,
     TRAV_ROUGHNESS,
     TRAV_SLOPE,
     TRAV_STEP,
-    TRAV_DEPRESSION,
 )
 from vrgrid.grid.fusion import unpack_class
 from vrgrid.grid.quantise import dequantise_variance_cm2
