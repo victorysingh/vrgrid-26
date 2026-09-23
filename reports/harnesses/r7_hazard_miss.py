@@ -1,7 +1,10 @@
 # PROVENANCE -- committed 2026-09-13 under OPEN-ITEMS.md item R-a.
 #
 # Produced: reports/r7-hazard-miss-rate.md
-#           the hazard-miss counts 8/19, 0/3, 4/38 and the false-alarm counts.
+#           the hazard-miss counts and the false-alarm counts.
+#           [2026-09-23] Regenerated post-df35fd5 on 5/10/20/40: 6/19, 1/3, 4/38
+#           with false alarms 65, 5, 54. SUPERSEDED (pre-df35fd5, kept for the
+#           record): 8/19, 0/3, 4/38.
 # Run:      VRGRID_DATA_ROOT=C:/KITTI/dataset \
 #             python reports/harnesses/r7_hazard_miss.py
 #

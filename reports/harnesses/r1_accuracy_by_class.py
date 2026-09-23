@@ -1,7 +1,10 @@
 # PROVENANCE -- committed 2026-09-13 under OPEN-ITEMS.md item R-a.
 #
 # Produced: reports/r1-accuracy-by-class-and-range-band.md
-#           the whole report: per-ring x per-class RMSE with n, and the ALL rows (07 1.78/3.60/5.91, 08 1.17/2.31/4.89, 00 2.74/6.77/34.10).
+#           the whole report: per-ring x per-class RMSE with n, and the ALL rows.
+#           [2026-09-23] Regenerated post-df35fd5: 07 1.87/2.90/5.98, 08 1.17/2.31/4.45,
+#           00 2.73/6.42/33.53. SUPERSEDED (pre-df35fd5, kept for the record):
+#           07 1.78/3.60/5.91, 08 1.17/2.31/4.89, 00 2.74/6.77/34.10.
 # Run:      VRGRID_DATA_ROOT=C:/KITTI/dataset \
 #             python reports/harnesses/r1_accuracy_by_class.py
 #
@@ -76,7 +79,11 @@ def run(seq, frames, sched_name):
     print("  " + "-" * 68)
     rows = []
     for L in range(len(gm.schedule.rings)):
-        slots, n_ref, ref_mean, ref_var, mine = metrics._compared(gm, ref, L)
+        # [2026-09-23] df35fd5 widened `_compared` to return a sixth value,
+        # `ref_returns` (returns per observed 5 cm cell). Sliced rather than
+        # unpacked so a future widening does not break this harness again;
+        # nothing here uses the new column.
+        slots, n_ref, ref_mean, ref_var, mine = metrics._compared(gm, ref, L)[:5]
         if not len(slots):
             print(f"  {REACH[L]:<10}{L:<6}{'(no scored cells)':<16}")
             continue

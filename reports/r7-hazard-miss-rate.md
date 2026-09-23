@@ -1,26 +1,18 @@
 # R7 — hazard miss rate, with the correct denominator
 
-> **⚠ [STALE 2026-09-23 — CAUSE ISOLATED, and it is NOT the band.]**
-> **Correction to this banner's own first version, same day:** it blamed `843ad54`'s
-> height-band change. **Measured, and that is wrong.** Restoring the old band
-> `[-2.0, 6.0]` leaves ring-0 RMSE **identical at 1.8660 cm**, so the band moves
-> nothing here. The cause is **`df35fd5`** (17 Sep, the D2/R3 ring-boundary rework):
-> measured at `df35fd5~1` ring-0 RMSE is **1.7747 cm** (gate OK, 0.8% from the
-> documented 1.76), and on the current tree it is **1.8660 cm** (gate FAILS, 6.0%
-> apart). That commit deliberately changed which returns land in which ring — it fixed
-> 0.108% nested footprints and 0.224% of returns being dropped — so the shift is most
-> likely an intended consequence that was never restated here. **This report's numbers
-> have therefore been stale since 17 Sep, and the harness gate has been failing that
-> whole time because nobody re-ran it.** Re-measuring is blocked until someone decides
-> whether 1.8660 is the correct new baseline; that is a judgement about the reference
-> map, tracked as the **RMSE-BASELINE** row in `OPEN-ITEMS.md`.
-> `843ad54` (17 Sep) moved `vertical_extent_m` from `[-2.0, 6.0]` to `[-3.5, 4.5]` in
-> both schedule configs — same 8 m span, shifted down 1.5 m — and wired it through
-> `quantise.py`, `metrics.py`, `harness.py` and both kernel files. **Every figure in
-> this report is height-derived and was measured on the OLD band.** They have **not**
-> been re-measured, so this is "do not quote until re-run", not "wrong". Re-running
-> this report against the current band is tracked as the **BAND** row in
-> `OPEN-ITEMS.md`.
+> **✅ [REGENERATED 2026-09-23 against the post-`df35fd5` map.]**
+> This report shared R1's ring-0 gate and was therefore unrunnable from 17 Sep to
+> 23 Sep for the same reason: the gate was pinned to a baseline `df35fd5` had moved.
+> See `reports/rmse-baseline-investigation-2026-09-23.md` for why 1.8660 is the
+> correct ring-0 value and 1.76 was not.
+>
+> **Superseded counts, kept rather than overwritten:** hazard misses were
+> **8/19, 0/3, 4/38** and are now **6/19, 1/3, 4/38** on `5/10/20/40`. Seq 07
+> improved (8 → 6 misses), seq 08 worsened by one (0 → 1), seq 00 is unchanged.
+>
+> **⚑ Confirmed by evidence, not yet by the author.** If Shrestha says the ring-0
+> effect was unintended, this becomes a live re-investigation and these counts
+> revert.
 
 
 *Measured 2026-09-11 overnight on `main` at `9b40ff2`. New computation from

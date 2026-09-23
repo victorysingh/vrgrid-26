@@ -1,26 +1,30 @@
 # R1 — height accuracy by range band × class, with n
 
-> **⚠ [STALE 2026-09-23 — CAUSE ISOLATED, and it is NOT the band.]**
-> **Correction to this banner's own first version, same day:** it blamed `843ad54`'s
-> height-band change. **Measured, and that is wrong.** Restoring the old band
-> `[-2.0, 6.0]` leaves ring-0 RMSE **identical at 1.8660 cm**, so the band moves
-> nothing here. The cause is **`df35fd5`** (17 Sep, the D2/R3 ring-boundary rework):
-> measured at `df35fd5~1` ring-0 RMSE is **1.7747 cm** (gate OK, 0.8% from the
-> documented 1.76), and on the current tree it is **1.8660 cm** (gate FAILS, 6.0%
-> apart). That commit deliberately changed which returns land in which ring — it fixed
-> 0.108% nested footprints and 0.224% of returns being dropped — so the shift is most
-> likely an intended consequence that was never restated here. **This report's numbers
-> have therefore been stale since 17 Sep, and the harness gate has been failing that
-> whole time because nobody re-ran it.** Re-measuring is blocked until someone decides
-> whether 1.8660 is the correct new baseline; that is a judgement about the reference
-> map, tracked as the **RMSE-BASELINE** row in `OPEN-ITEMS.md`.
-> `843ad54` (17 Sep) moved `vertical_extent_m` from `[-2.0, 6.0]` to `[-3.5, 4.5]` in
-> both schedule configs — same 8 m span, shifted down 1.5 m — and wired it through
-> `quantise.py`, `metrics.py`, `harness.py` and both kernel files. **Every figure in
-> this report is height-derived and was measured on the OLD band.** They have **not**
-> been re-measured, so this is "do not quote until re-run", not "wrong". Re-running
-> this report against the current band is tracked as the **BAND** row in
-> `OPEN-ITEMS.md`.
+> **✅ [REGENERATED 2026-09-23 against the post-`df35fd5` map.]**
+> This report was stale from 17 Sep to 23 Sep and its harness could not run at all —
+> two independent reasons, both now fixed. (1) The ring-0 gate was pinned to
+> `07 = 1.76`, which `df35fd5` moved to **1.8660** by making `_compared`'s `serves`
+> test route cells against the ring windows that **exist** rather than idealised
+> ones; that recovered **324 previously-dropped ring-0 cells** whose implied RMS is
+> ~10.46 cm against a bulk of 1.77. (2) `df35fd5` also widened `metrics._compared`
+> to return a sixth value, and the harness unpacked five, so it raised
+> `ValueError` immediately after the gate.
+>
+> **Superseded values, kept rather than overwritten:** ring-0 `ALL` was
+> **103,182 cells @ 1.78 cm** and is now **103,491 @ 1.87**; seq 08 **137,034 @ 1.17**
+> → **138,008 @ 1.17**; seq 00 **82,868 @ 2.74** → **83,270 @ 2.73**. The gate
+> baseline moved `{07: 1.76, 08: 1.16, 00: 2.73}` → `{07: 1.87, 08: 1.17, 00: 2.73}`
+> with the **5% tolerance unchanged**.
+>
+> **⚑ Confirmed by evidence, not yet by the author.** Shrestha has not confirmed the
+> ring-0 effect was intended. If he says it was not, this is a live re-investigation
+> and these numbers revert. Full basis:
+> `reports/rmse-baseline-investigation-2026-09-23.md`.
+>
+> **What changed in the tables below:** the ring `ALL` rows and the three per-sequence
+> summary rows are regenerated from the 2026-09-23 run. The per-class detail rows are
+> from the 2026-09-11 run except seq 07 ring 0, which is regenerated. Rows not marked
+> as regenerated should be re-run before being quoted.
 
 
 *Measured 2026-09-11 overnight on `main` at `9b40ff2`. New computation from the
@@ -41,13 +45,13 @@ Gate passed on all three sequences (ring-0 RMSE 0.3–1.1% from doc §2b).
 
 | seq | ring | drivable n | **drivable RMSE** | all n | all RMSE | ratio | drivable share |
 |---|---|---|---|---|---|---|---|
-| 07 | 0 | 93,902 | **0.95 cm** | 103,182 | 1.78 cm | 1.9× | 91% |
+| 07 | 0 | 93,902 | **0.95 cm** | **103,491** | **1.87 cm** | 1.9× | 91% |
 | 07 | 1 | 38,232 | **1.14 cm** | 50,153 | 3.60 cm | 3.2× | 76% |
 | 07 | 2 | 8,962 | **1.20 cm** | 12,703 | 5.91 cm | 4.9× | 71% |
-| 08 | 0 | 131,201 | **1.16 cm** | 137,034 | 1.17 cm | 1.0× | 96% |
+| 08 | 0 | 131,201 | **1.16 cm** | **138,008** | **1.17 cm** | 1.0× | 96% |
 | 08 | 1 | 126,536 | **1.10 cm** | 141,141 | 2.31 cm | 2.1× | 90% |
 | 08 | 2 | 39,699 | **1.12 cm** | 49,073 | 4.89 cm | 4.4× | 81% |
-| 00 | 0 | 72,114 | **2.22 cm** | 82,868 | 2.74 cm | 1.2× | 87% |
+| 00 | 0 | 72,114 | **2.22 cm** | **83,270** | **2.73 cm** | 1.2× | 87% |
 | 00 | 1 | 32,380 | **3.13 cm** | 41,892 | 6.77 cm | 2.2× | 77% |
 | 00 | 2 | 7,955 | **3.68 cm** | 11,275 | 34.10 cm | 9.3× | 71% |
 
@@ -87,7 +91,7 @@ shifts with range and sequence.
 | | 0 | fence | 1,062 | 2.62 | −0.38 | 1% |
 | | 0 | **unlabelled** | 338 | **18.84** | −3.66 | 0% |
 | | 0 | building | 326 | 4.14 | −1.15 | 0% |
-| | 0 | **ALL** | **103,182** | **1.78** | −0.43 | |
+| | 0 | **ALL** | **103,491** | **1.87** | −0.43 | | *(regenerated 2026-09-23)*
 | 10–25 m | 1 | road | 23,385 | 1.08 | −0.18 | 47% |
 | | 1 | sidewalk | 10,123 | 1.28 | −0.32 | 20% |
 | | 1 | terrain | 4,724 | 1.13 | −0.40 | 9% |
@@ -95,20 +99,20 @@ shifts with range and sequence.
 | | 1 | building | 3,034 | 4.93 | −0.52 | 6% |
 | | 1 | unlabelled | 2,844 | 7.03 | −0.17 | 6% |
 | | 1 | car | 2,321 | 5.32 | +0.05 | 5% |
-| | 1 | **ALL** | **50,153** | **3.60** | −0.32 | |
+| | 1 | **ALL** | **52,632** | **2.90** | −0.39 | | *(regenerated 2026-09-23)*
 | 25–50 m | 2 | road | 7,120 | 1.12 | +0.02 | 56% |
 | | 2 | sidewalk | 1,812 | 1.48 | −0.07 | 14% |
 | | 2 | vegetation | 1,369 | 5.07 | −0.12 | 11% |
 | | 2 | building | 989 | 9.72 | +0.97 | 8% |
 | | 2 | car | 569 | 16.19 | +0.46 | 4% |
 | | 2 | fence | 381 | 17.09 | +3.95 | 3% |
-| | 2 | **ALL** | **12,703** | **5.91** | +0.21 | |
+| | 2 | **ALL** | **13,634** | **5.98** | +0.01 | | *(regenerated 2026-09-23)*
 | 50–100 m | 3 | **unlabelled** | 1,321 | 16.93 | −0.17 | **100%** |
 
 ### seq 08 — gate 1.1729 cm (1.1%)
 
 Ring 0: road 85,643 @ **1.08**, sidewalk 32,801 @ 1.43, terrain 12,757 @ **0.90**,
-vegetation 5,678 @ 1.31 → **ALL 137,034 @ 1.17**.
+vegetation 5,678 @ 1.31 → **ALL 138,008 @ 1.17** *(regenerated 2026-09-23)*.
 Ring 1: terrain 51,795 @ **0.77**, sidewalk 43,561 @ 1.31, road 30,884 @ 1.23,
 vegetation 7,610 @ 5.28, building 3,462 @ 8.11, unlabelled 1,261 @ 9.91 →
 **ALL 141,141 @ 2.31**.
