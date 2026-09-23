@@ -56,6 +56,10 @@ looked entirely plausible and neither was findable from this file alone.
 import numpy as np
 from vrgrid.cell import (
     FLAG_BLIND,
+    FLAG_VRU_AGE_MASK,
+    FLAG_VRU_AGE_MAX,
+    FLAG_VRU_AGE_SHIFT,
+    FLAG_VRU_SEEN,
     OCC_FREE,
     OCC_OCCUPIED,
     OCC_UNKNOWN,
@@ -249,6 +253,13 @@ def fuse(soa, aggregate, thresholds=None, dt_s: float | None = None) -> None:
         soa["semantic_class"][slots], aggregate.class_id
     )
 
+    # --- R5: the sticky safety-critical latch --------------------------------
+    # UNCHANGED above: majority voting still decides `semantic_class` for every
+    # class, safety-critical or not. This is an ADDITIONAL latch in a different
+    # byte, never a replacement for the vote -- a consumer wanting "what is this
+    # cell mostly?" reads `semantic_class` exactly as before.
+    mark_vru_seen(soa, slots, aggregate.class_id)
+
     # --- reflectivity (§10.3) -----------------------------------------------
     # This frame's mean, not a running one. rho-hat is already normalised for
     # range and incidence, so what is left is a property of the surface NOW --
@@ -267,6 +278,85 @@ def fuse(soa, aggregate, thresholds=None, dt_s: float | None = None) -> None:
 
 # --- §10.2: Boyer-Moore majority in one byte ---------------------------------
 
+
+
+# --- R5: sticky safety-critical class bit -------------------------------------
+
+VRU_CLASS_IDS = (5, 6, 7)   # person, bicyclist, motorcyclist -- the VRUs proper.
+#                             Learning ids 1/2 are the UNOCCUPIED bicycle and
+#                             motorcycle; the design doc leaves those out of the
+#                             latch on purpose and calls it a separate decision.
+
+
+def mark_vru_seen(soa, slots, observed_class_id) -> None:
+    """Latch FLAG_VRU_SEEN where a safety-critical class was observed. Math §10.2.
+
+    Boyer-Moore answers "what is this cell mostly?". On a road-dominated cell a
+    person is routinely a minority of the returns -- especially past 25 m, where
+    the semantic label carries the detection burden because the geometry no
+    longer resolves a 30 cm feature (§1.2) -- so the counter decrements the VRU
+    candidate away and the cell reads `road`. That is correct majority voting and
+    the wrong answer for a planner.
+
+    Setting the bit also RESETS the age counter to 0, which is what makes the
+    decay mean "frames since a VRU was observed HERE" rather than "frames since
+    this cell was observed". Those are different questions and conflating them is
+    the failure mode the design doc calls out.
+    """
+    observed = np.asarray(observed_class_id)
+    is_vru = np.isin(observed, VRU_CLASS_IDS)
+    if not is_vru.any():
+        return
+    hit = np.asarray(slots)[is_vru]
+    flags = soa["flags"]
+    flags[hit] |= FLAG_VRU_SEEN
+    flags[hit] &= ~np.uint8(FLAG_VRU_AGE_MASK)      # age <- 0 on every sighting
+
+
+def age_vru_latch(soa, tested_slots, thresholds=None) -> None:
+    """Decay FLAG_VRU_SEEN in the VISIBILITY pass. R5, decay option 2.
+
+    Called with the cells the §10.4 pass actually TESTED this frame -- the
+    distinction that pass already draws between "looked at and resolved" and
+    "not looked at". Ageing here rather than in `fuse()` is what keeps the decay
+    on a look-at schedule instead of an observation one: a latched cell that the
+    vehicle keeps testing ages out even though nothing is ever observed in it,
+    which is exactly the busy road cell the doc warns about.
+
+    `mark_vru_seen` resets the counter on every sighting, so a cell ages only
+    while no VRU is seen in it. Cells not tested this frame are untouched.
+
+    ⚑ The counter is 3 bits, so N is capped at 7. `vru_decay_frames` is read
+      from `configs/thresholds.yaml`, never inlined -- a constant in source
+      cannot be frozen (flaw E6).
+    """
+    tested = np.asarray(tested_slots, dtype=np.int64)
+    if tested.size == 0:
+        return
+    th = thresholds if thresholds is not None else load_thresholds()
+    n = int(th["traversability"]["vru_decay_frames"])
+    n = max(0, min(n, FLAG_VRU_AGE_MAX))
+
+    flags = soa["flags"]
+    latched = tested[(flags[tested] & FLAG_VRU_SEEN) != 0]
+    if latched.size == 0:
+        return
+    age = (flags[latched] & FLAG_VRU_AGE_MASK) >> FLAG_VRU_AGE_SHIFT
+    aged = np.minimum(age + 1, FLAG_VRU_AGE_MAX)
+
+    expired = latched[aged > n]
+    alive = latched[aged <= n]
+    if alive.size:
+        keep = aged[aged <= n].astype(np.uint8) << FLAG_VRU_AGE_SHIFT
+        flags[alive] = (flags[alive] & ~np.uint8(FLAG_VRU_AGE_MASK)) | keep
+    if expired.size:
+        flags[expired] &= ~np.uint8(FLAG_VRU_SEEN | FLAG_VRU_AGE_MASK)
+
+
+def has_vru_latch(soa, slots=None) -> np.ndarray:
+    """Bool per cell: has anything safety-critical been seen here recently?"""
+    flags = soa["flags"] if slots is None else soa["flags"][np.asarray(slots)]
+    return (flags & FLAG_VRU_SEEN) != 0
 
 def unpack_class(packed):
     """One byte -> (candidate, counter)."""

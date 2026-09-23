@@ -65,6 +65,7 @@ from vrgrid.gpu.visibility import Sensor, apply_miss, visibility_cleanup
 # gone on clipping perfectly storable ids after the split landed.
 from vrgrid.grid.fusion import (
     CLASS_MAX,
+    age_vru_latch,
     fuse,
     new_occupancy_scratch,
     occupancy_state,
@@ -629,6 +630,15 @@ class MapEngine:
         apply_miss(self.handle.grid["log_odds"], self._cand_slots[:m],
                    result.see_through, occ["log_odds_miss"],
                    tuple(occ["log_odds_clamp"]))
+
+        # R5: the VRU latch decays HERE, in the visibility pass, against the
+        # cells this pass actually TESTED -- `self._cand_slots[:m]`. Ageing it
+        # here rather than in `fuse()` is the whole point of decay option 2: a
+        # latched cell the vehicle keeps looking at ages out even though nothing
+        # is ever observed in it. Keying it to `frames_since_seen` instead would
+        # pin a busy near-field road cell at age 0 forever, which is exactly
+        # where a VRU is most likely to have been a transient minority.
+        age_vru_latch(self.handle.grid, self._cand_slots[:m], self.thresholds)
 
         counters.tested = result.tested
         counters.cleared = result.cleared

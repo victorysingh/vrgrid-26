@@ -136,17 +136,57 @@ def test_unobserved_neighbours_are_not_differenced():
                                     BASELINE_M, DIP_MIN_CM)[32 * SIDE + 32]
 
 
-# --- the frozen surface is untouched -----------------------------------------
+# --- the frozen surface: the bit is now live ----------------------------------
 
-def test_no_trav_depression_bit_exists_yet():
-    """R10 is deliberately UNWIRED until the frozen-file change is signed off.
+def test_trav_depression_bit_exists_and_the_struct_did_not_grow():
+    """The bit landed 2026-09-23 on JP's authorisation as lead.
 
-    `TRAV_DEPRESSION = 1 << 6` must be declared in `include/vrgrid/cell.py`,
-    which is a whole-team change regardless of who owns `src/grid/`. When that
-    lands, this test is the reminder to wire the bit into `bitfield()`.
+    The earlier version of this test asserted the bit did NOT exist, as the
+    reminder to wire it once sign-off happened. It fired correctly the moment
+    the constant landed, which is what it was for.
     """
     from vrgrid import cell
-    assert not hasattr(cell, "TRAV_DEPRESSION"), (
-        "TRAV_DEPRESSION now exists — wire depression_mask into bitfield() and "
-        "update this test")
+    assert cell.TRAV_DEPRESSION == 1 << 6
     assert cell.CELL_BYTES == 12, "R10 must not grow the frozen cell struct"
+    assert cell.CELL_DTYPE.itemsize == 12
+    # bit 7 is still free
+    used = [v.bit_length() - 1 for k, v in vars(cell).items() if k.startswith("TRAV_")]
+    assert 7 not in used
+
+
+def test_the_bit_actually_fires_through_bitfield():
+    """End to end: a bowl in ring 0 sets TRAV_DEPRESSION in the real predicate."""
+    from vrgrid import cell
+    from vrgrid.cell import alloc_soa
+
+    soa = alloc_soa(SIDE * SIDE)
+    soa["ground_height"][:] = _depression()
+    soa["obs_count"][:] = 5
+    soa["ceiling_height"][:] = 10_000          # nothing overhead
+    bits = trav.bitfield(soa, slice(0, SIDE * SIDE), SIDE, CELL_M, ring_index=0)
+    assert (bits & cell.TRAV_DEPRESSION).any(), "bit 6 never set on a real bowl"
+
+
+def test_flat_ground_does_not_set_the_bit_through_bitfield():
+    from vrgrid import cell
+    from vrgrid.cell import alloc_soa
+
+    soa = alloc_soa(SIDE * SIDE)
+    soa["ground_height"][:] = _flat()
+    soa["obs_count"][:] = 5
+    soa["ceiling_height"][:] = 10_000
+    bits = trav.bitfield(soa, slice(0, SIDE * SIDE), SIDE, CELL_M, ring_index=0)
+    assert not (bits & cell.TRAV_DEPRESSION).any()
+
+
+def test_ring_2_does_not_set_the_bit_through_bitfield():
+    """The range limit survives the wiring, not just the helper."""
+    from vrgrid import cell
+    from vrgrid.cell import alloc_soa
+
+    soa = alloc_soa(SIDE * SIDE)
+    soa["ground_height"][:] = _depression()
+    soa["obs_count"][:] = 5
+    soa["ceiling_height"][:] = 10_000
+    bits = trav.bitfield(soa, slice(0, SIDE * SIDE), SIDE, CELL_M, ring_index=2)
+    assert not (bits & cell.TRAV_DEPRESSION).any()
